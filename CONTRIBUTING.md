@@ -18,6 +18,15 @@ uv run pytest
 
 ### CI
 
-Pull requests and pushes to `main` run the **`test`** GitHub Actions job (`.github/workflows/ci.yml`): `uv sync --extra dev` then `uv run pytest` on Ubuntu. ML extras (`parakeet` / `whisper`) are not installed in CI; unit tests do not require them.
+Pull requests and pushes to `main` run the **`test`** GitHub Actions job (`.github/workflows/ci.yml`):
+
+1. `uv sync --extra dev`
+2. `uv run pytest` with line + branch coverage (`pytest-cov`)
+3. Statement-coverage ratchet (`scripts/check_coverage_ratchet.py`, currently **≥ 65%**)
+4. Upload `coverage.xml` to Codecov (badge in README)
+
+ML extras (`parakeet` / `whisper`) are not installed in CI; unit tests do not require them. Branch coverage is reported to Codecov but is not gated yet.
+
+Set repository secret `CODECOV_TOKEN` (from [codecov.io](https://codecov.io)) so uploads succeed on the protected `main` branch.
 
 Once the workflow has run at least once on `main`, you can mark **`test`** as a required status check on the Protect main ruleset.

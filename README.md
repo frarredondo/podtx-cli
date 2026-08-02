@@ -1,5 +1,8 @@
 # podtx-cli
 
+[![CI](https://github.com/frarredondo/podtx-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/frarredondo/podtx-cli/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/frarredondo/podtx-cli/graph/badge.svg)](https://codecov.io/gh/frarredondo/podtx-cli)
+
 CLI (`podtx`) to pull podcast episodes from an RSS feed and transcribe them locally on Apple Silicon.
 
 Default engine: **NVIDIA Parakeet TDT v3** via [`parakeet-mlx`](https://github.com/senstella/parakeet-mlx).  
@@ -123,6 +126,6 @@ uv sync --extra all --extra dev
 uv run pytest
 ```
 
-CI runs the same unit suite on pull requests via the GitHub Actions job **`test`** (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+CI runs the unit suite with coverage on pull requests via the GitHub Actions job **`test`** (see [CONTRIBUTING.md](CONTRIBUTING.md)). Statement coverage is ratcheted at **≥ 65%**; branch coverage is reported but not gated yet.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to file bugs and feature requests.

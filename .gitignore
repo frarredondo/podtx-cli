@@ -25,3 +25,10 @@ PLAN.md
 
 # Local example / e2e artifacts
 examples/
+
+# Coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
