@@ -59,6 +59,7 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
 | `podtx sync [feed]` | Transcribe new episodes |
 | `podtx transcribe <target>` | One-shot RSS / URL / file |
 | `podtx format <json\|--feed\|--all>` | Re-format existing transcript JSON (no ASR) |
+| `podtx rename --from-title --feed\|--all` | Fix `_000_` filenames from title episode numbers |
 
 ### Useful flags
 
@@ -84,6 +85,15 @@ Re-format an existing transcript without re-running ASR:
 podtx format path/to/episode.json --readable --cleanup
 podtx format --feed corecursive-coding-stories --readable --cleanup
 podtx format --all --readable --cleanup
+```
+
+Rename already-transcribed files whose episode number was missing (`_000_`)
+when the title embeds a clear number (same rules as filename inference above):
+
+```bash
+podtx rename --from-title --feed syntax-tasty-web-development-treats --dry-run
+podtx rename --from-title --feed syntax-tasty-web-development-treats
+podtx rename --from-title --all
 ```
 
 ## Data & config
