@@ -90,6 +90,10 @@ podtx format --all --readable --cleanup
 
 - Data (SQLite state, transcripts, temp audio): `~/.local/share/podcast-transcriber/`
 - Optional config: `~/.config/podcast-transcriber/config.toml`
+- Transcript filenames: `{YYYY-MM-DD}_{episode:03d}_{slug}`. Episode comes from
+  RSS `itunes:episode` when present; otherwise a clear leading number in the title
+  is used (`860 - …`, `#860 …`, `Episode 860: …`). Section-style ids like `1.1 - …`
+  are ignored (fallback `000`).
 
 ```toml
 engine = "parakeet"
