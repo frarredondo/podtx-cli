@@ -52,5 +52,5 @@ relative_files = true
 show_missing = true
 skip_covered = false
 precision = 0
-# Line/statement ratchet is enforced by scripts/check_coverage_ratchet.py
-# (branch coverage is measured and uploaded, but not gated yet).
+# Project statement + branch ratchets: scripts/check_coverage_ratchet.py
+# (combined coverage is reported but not gated).

@@ -9,6 +9,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   test:
     name: test
@@ -33,19 +37,12 @@ jobs:
 
       - name: Run unit tests with coverage
         run: >
-          uv run pytest
+          uv run python -m pytest
           --cov=podtx
           --cov-branch
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
           --cov-report=json:coverage.json
-
-      - name: Enforce statement coverage ratchet
-        env:
-          # Repo Actions variable (Settings → Secrets and variables → Actions → Variables).
-          # Falls back to 65 in the script if unset.
-          COVERAGE_RATCHET_MIN: ${{ vars.COVERAGE_RATCHET_MIN }}
-        run: uv run python scripts/check_coverage_ratchet.py
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -55,3 +52,41 @@ jobs:
           name: unit
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
+
+      - name: Upload coverage.json for ratchet job
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-json
+          path: coverage.json
+          if-no-files-found: error
+
+  coverage-ratchet:
+    name: coverage-ratchet
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download coverage.json
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-json
+
+      - name: Enforce coverage ratchet (statements + branches)
+        id: ratchet
+        env:
+          # Repo Actions variables (Settings → Secrets and variables → Actions → Variables).
+          COVERAGE_RATCHET_MIN: ${{ vars.COVERAGE_RATCHET_MIN }}
+          COVERAGE_RATCHET_MIN_BRANCHES: ${{ vars.COVERAGE_RATCHET_MIN_BRANCHES }}
+        run: python3 scripts/check_coverage_ratchet.py
+
+      - name: Sticky coverage PR comment
+        if: always() && github.event_name == 'pull_request' && hashFiles('coverage-ratchet.md') != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          # Update the same comment in place (do not recreate — that posts a new
+          # comment at the bottom and is not sticky).
+          header: podtx-coverage-ratchet
+          path: coverage-ratchet.md
+          skip_unchanged: true
