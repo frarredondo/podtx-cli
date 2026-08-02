@@ -216,6 +216,20 @@ def test_cli_format_all(tmp_path: Path) -> None:
     assert "2" in result.stdout or "Wrote" in result.stdout
 
 
+def test_cli_format_feed_reports_failures(tmp_path: Path) -> None:
+    root = _library(tmp_path)
+    bad = root / "feed-a" / "broken.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["format", "--feed", "feed-a", "--data-dir", str(tmp_path), "--cleanup"],
+    )
+    assert result.exit_code != 0
+    out = result.stdout + result.stderr
+    assert "Failed" in out
+    assert "failed" in out
+
+
 def test_cli_format_requires_target(tmp_path: Path) -> None:
     result = runner.invoke(app, ["format", "--cleanup"])
     assert result.exit_code != 0
