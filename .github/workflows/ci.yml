@@ -85,6 +85,8 @@ jobs:
         if: always() && github.event_name == 'pull_request' && hashFiles('coverage-ratchet.md') != ''
         uses: marocchino/sticky-pull-request-comment@v2
         with:
+          # Update the same comment in place (do not recreate — that posts a new
+          # comment at the bottom and is not sticky).
           header: podtx-coverage-ratchet
           path: coverage-ratchet.md
-          recreate: true
+          skip_unchanged: true
