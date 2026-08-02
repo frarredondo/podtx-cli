@@ -186,6 +186,32 @@ class Database:
         )
         self._conn.commit()
 
+    def update_episode_paths(
+        self,
+        *,
+        feed_id: int,
+        guid: str,
+        episode_num: int,
+        output_paths: list[Path],
+    ) -> bool:
+        """Update episode number and output paths after a rename (no status change)."""
+        cur = self._conn.execute(
+            """
+            UPDATE episodes
+            SET episode_num = ?,
+                output_paths_json = ?
+            WHERE feed_id = ? AND guid = ?
+            """,
+            (
+                episode_num,
+                json.dumps([str(p) for p in output_paths]),
+                feed_id,
+                guid,
+            ),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def mark_error(self, *, feed_id: int, guid: str, message: str) -> None:
         self._conn.execute(
             """

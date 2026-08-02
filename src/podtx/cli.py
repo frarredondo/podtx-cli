@@ -22,6 +22,7 @@ from podtx.format_cmd import (
     reformat_many,
     reformat_transcript,
 )
+from podtx.rename_cmd import rename_many_from_title
 from podtx.rss import FeedParseError, parse_feed, suggest_unique_slug
 
 app = typer.Typer(
@@ -551,6 +552,90 @@ def format_cmd(
             err_console.print(f"[red]Failed[/red] {path}: {message}")
         console.print(
             f"[bold]Done[/bold]: {result.ok} ok, {result.failed} failed"
+        )
+
+    if result.failed:
+        raise typer.Exit(1)
+
+
+@app.command("rename")
+def rename_cmd(
+    from_title: bool = typer.Option(
+        False,
+        "--from-title",
+        help="Infer episode numbers from JSON titles and rename sibling outputs",
+    ),
+    feed: Optional[str] = typer.Option(
+        None,
+        "--feed",
+        help="Rename transcripts for a feed slug",
+    ),
+    all_feeds: bool = typer.Option(
+        False,
+        "--all",
+        help="Rename transcripts across the whole library",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print planned renames without writing",
+    ),
+    data_dir: Optional[Path] = typer.Option(
+        None, "--data-dir", help="Override data directory"
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+) -> None:
+    """Rename transcript outputs to fix missing episode numbers (no ASR).
+
+    Currently supports ``--from-title`` with ``--feed`` or ``--all``.
+    """
+    if not from_title:
+        err_console.print("[red]Specify --from-title[/red] (only rename mode supported)")
+        raise typer.Exit(1)
+
+    if sum([feed is not None, all_feeds]) != 1:
+        err_console.print("[red]Specify exactly one of:[/red] `--feed <slug>` or `--all`")
+        raise typer.Exit(1)
+
+    settings = load_settings(data_dir=data_dir)
+    ensure_data_dirs(settings)
+    transcripts_root = settings.transcripts_dir()
+    try:
+        targets = discover_transcript_jsons(
+            transcripts_root,
+            feed=None if all_feeds else feed,
+        )
+    except TranscriptJsonError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if not targets:
+        err_console.print("[dim]No transcript JSON files found.[/dim]")
+        raise typer.Exit(1)
+
+    if not quiet:
+        scope = "all feeds" if all_feeds else f"feed {feed}"
+        mode = "Dry-run rename" if dry_run else "Renaming"
+        console.print(f"[bold]{mode} {len(targets)} transcript(s)[/bold] ({scope})")
+
+    db = Database(settings.state_db_path())
+    try:
+        result = rename_many_from_title(targets, dry_run=dry_run, db=None if dry_run else db)
+    finally:
+        db.close()
+
+    if not quiet:
+        for old, new in result.renames:
+            verb = "Would rename" if dry_run else "Renamed"
+            console.print(f"[green]{verb}[/green] {old.name} → {new.name}")
+        for path, message in result.skips:
+            console.print(f"[dim]Skipped[/dim] {path.name}: {message}")
+        for path, message in result.errors:
+            err_console.print(f"[red]Failed[/red] {path.name}: {message}")
+        prefix = "Dry-run done" if dry_run else "Done"
+        console.print(
+            f"[bold]{prefix}[/bold]: {result.ok} ok, "
+            f"{result.skipped} skipped, {result.failed} failed"
         )
 
     if result.failed:
