@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,14 @@ from podtx.writers import write_outputs
 
 class TranscriptJsonError(ValueError):
     pass
+
+
+@dataclass
+class BatchFormatResult:
+    ok: int = 0
+    failed: int = 0
+    written: list[Path] = field(default_factory=list)
+    errors: list[tuple[Path, str]] = field(default_factory=list)
 
 
 def load_transcript_json(path: Path) -> tuple[Episode, Transcript]:
@@ -63,6 +72,28 @@ def load_transcript_json(path: Path) -> tuple[Episode, Transcript]:
     return episode, transcript
 
 
+def discover_transcript_jsons(
+    transcripts_root: Path,
+    *,
+    feed: str | None = None,
+) -> list[Path]:
+    """Find transcript JSON files under the library transcripts root.
+
+    ``feed`` selects ``transcripts_root/<feed>/*.json``.
+    ``feed=None`` selects all ``transcripts_root/*/*.json`` (one level of feed dirs).
+    """
+    root = transcripts_root.expanduser()
+    if feed is not None:
+        feed_dir = root / feed
+        if not feed_dir.is_dir():
+            raise TranscriptJsonError(f"Feed transcript folder not found: {feed}")
+        return sorted(feed_dir.glob("*.json"))
+
+    if not root.is_dir():
+        return []
+    return sorted(root.glob("*/*.json"))
+
+
 def reformat_transcript(
     json_path: Path,
     *,
@@ -85,3 +116,31 @@ def reformat_transcript(
         readable=readable,
         cleanup=cleanup,
     )
+
+
+def reformat_many(
+    json_paths: list[Path],
+    *,
+    out_dir: Path | None = None,
+    readable: bool = False,
+    cleanup: bool = False,
+    formats: tuple[str, ...] = ("txt", "json"),
+) -> BatchFormatResult:
+    """Reformat many transcript JSON files; continue on per-file errors."""
+    result = BatchFormatResult()
+    for path in json_paths:
+        try:
+            written = reformat_transcript(
+                path,
+                out_dir=out_dir,
+                readable=readable,
+                cleanup=cleanup,
+                formats=formats,
+            )
+        except (TranscriptJsonError, OSError, ValueError) as exc:
+            result.failed += 1
+            result.errors.append((path, str(exc)))
+            continue
+        result.ok += 1
+        result.written.extend(written)
+    return result
