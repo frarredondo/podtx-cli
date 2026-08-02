@@ -1,5 +1,6 @@
 # Codecov config: https://docs.codecov.com/docs/codecov-yaml
-# CI enforces a statement-coverage ratchet locally; Codecov statuses are informational.
+# CI enforces project statement + branch ratchets locally (sticky PR comment);
+# Codecov statuses remain informational (including patch coverage).
 
 coverage:
   status:

@@ -130,6 +130,6 @@ uv sync --extra all --extra dev
 uv run pytest
 ```
 
-CI runs the unit suite with coverage on pull requests via the GitHub Actions job **`test`** (see [CONTRIBUTING.md](CONTRIBUTING.md)). Statement coverage is ratcheted via repo variable **`COVERAGE_RATCHET_MIN`** (default 65%); branch coverage is reported but not gated yet.
+CI runs the unit suite with coverage on pull requests via jobs **`test`** and **`coverage-ratchet`** (see [CONTRIBUTING.md](CONTRIBUTING.md)). Project statement/branch floors come from repo variables **`COVERAGE_RATCHET_MIN`** (default 65%) and **`COVERAGE_RATCHET_MIN_BRANCHES`** (default 45%); combined coverage is informational. PRs also get a sticky coverage comment (whole package, not patch).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to file bugs and feature requests.

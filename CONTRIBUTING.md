@@ -18,17 +18,24 @@ uv run pytest
 
 ### CI
 
-Pull requests and pushes to `main` run the **`test`** GitHub Actions job (`.github/workflows/ci.yml`):
+Pull requests and pushes to `main` run two GitHub Actions jobs (`.github/workflows/ci.yml`):
 
-1. `uv sync --extra dev`
-2. `uv run pytest` with line + branch coverage (`pytest-cov`)
-3. Statement-coverage ratchet (`scripts/check_coverage_ratchet.py`), floor from repo Actions variable **`COVERAGE_RATCHET_MIN`** (default **65** if unset)
-4. Upload `coverage.xml` to Codecov (badge in README)
+1. **`test`** — `uv sync --extra dev`, then `pytest` with line + branch coverage; upload `coverage.xml` to Codecov
+2. **`coverage-ratchet`** — project coverage floors for package `podtx` (whole package on the branch tip, **not** Codecov patch/diff coverage):
+   - Statements ≥ **`COVERAGE_RATCHET_MIN`** (default **65**)
+   - Branches ≥ **`COVERAGE_RATCHET_MIN_BRANCHES`** (default **45**)
+   - Combined is reported only (not gated)
+   - On pull requests, posts/updates a sticky comment with the summary
 
-ML extras (`parakeet` / `whisper`) are not installed in CI; unit tests do not require them. Branch coverage is reported to Codecov but is not gated yet.
+ML extras (`parakeet` / `whisper`) are not installed in CI; unit tests do not require them.
 
-Raise the ratchet over time by updating **`COVERAGE_RATCHET_MIN`** under *Settings → Secrets and variables → Actions → Variables* (no code change required). Locally: `COVERAGE_RATCHET_MIN=65 uv run python scripts/check_coverage_ratchet.py`.
+Raise floors over time under *Settings → Secrets and variables → Actions → Variables* (no code change required). Locally:
+
+```bash
+COVERAGE_RATCHET_MIN=65 COVERAGE_RATCHET_MIN_BRANCHES=45 \
+  uv run python scripts/check_coverage_ratchet.py
+```
 
 Repository secret `CODECOV_TOKEN` is required for Codecov uploads on protected branches.
 
-Once the workflow has run at least once on `main`, you can mark **`test`** as a required status check on the Protect main ruleset.
+Once the workflow has run at least once on `main`, mark **`test`** and **`coverage-ratchet`** as required status checks on the Protect main ruleset.
