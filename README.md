@@ -66,7 +66,10 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
 - `--keep-audio` — retain downloaded audio
 - `--local-attention` / `--full-attention` — Parakeet attention mode (default: local; required for long episodes)
 - `--local-attention-context-size N` — local attention window (default: 256)
-- `--readable` — paragraph breaks on silence gaps for human reading (default is raw continuous text; JSON timestamps are always rounded)
+- `--readable` — paragraph breaks for human reading: silence gaps, then sentence
+  boundaries after ~20s, with a max ~45s / ~120 words so long Parakeet runs
+  don’t stay as one wall of text (default is raw continuous text; JSON timestamps
+  are always rounded)
 - `--cleanup` — strip `uh`/`um` and collapse consecutive word doubles in text outputs (JSON segments stay raw)
 - `--out-dir` / `--data-dir` — override output or app data paths
 - `--quiet` — less terminal noise
