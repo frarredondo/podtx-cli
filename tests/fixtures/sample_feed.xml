@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Demo Podcast</title>
+    <item>
+      <title>Interview with Ada</title>
+      <guid>ep-3</guid>
+      <pubDate>Sat, 15 Mar 2026 12:00:00 GMT</pubDate>
+      <itunes:episode>3</itunes:episode>
+      <enclosure url="https://example.com/audio/ep3.mp3" type="audio/mpeg" length="1000"/>
+    </item>
+    <item>
+      <title>Second Episode</title>
+      <guid>ep-2</guid>
+      <pubDate>Sat, 08 Mar 2026 12:00:00 GMT</pubDate>
+      <itunes:episode>2</itunes:episode>
+      <enclosure url="https://example.com/audio/ep2.mp3" type="audio/mpeg" length="1000"/>
+    </item>
+    <item>
+      <title>Pilot</title>
+      <guid>ep-1</guid>
+      <pubDate>Sat, 01 Mar 2026 12:00:00 GMT</pubDate>
+      <enclosure url="https://example.com/audio/ep1.mp3" type="audio/mpeg" length="1000"/>
+    </item>
+  </channel>
+</rss>

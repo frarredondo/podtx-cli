@@ -1,0 +1,43 @@
+[project]
+name = "podtx-cli"
+version = "0.1.0"
+description = "CLI to pull and transcribe podcast episodes from RSS using local AI models"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+dependencies = [
+    "typer>=0.16.0",
+    "rich>=14.0.0",
+    "httpx>=0.28.0",
+    "feedparser>=6.0.11",
+    "platformdirs>=4.3.0",
+]
+
+[project.optional-dependencies]
+parakeet = [
+    "parakeet-mlx>=0.4.0",
+]
+whisper = [
+    "mlx-whisper>=0.4.0",
+]
+all = [
+    "podtx-cli[parakeet,whisper]",
+]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+podtx = "podtx.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "podtx"
+module-root = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tooling / OS
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+
+# Local data / audio dumps
+*.wav
+*.mp3
+*.m4a
+
+# Keep plan local / out of version control
+PLAN.md
+
+# Local example / e2e artifacts
+examples/
