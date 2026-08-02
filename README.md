@@ -116,3 +116,5 @@ New engines: implement `TranscriptionEngine` in `src/podtx/engines/` and registe
 uv sync --extra all --extra dev
 uv run pytest
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to file bugs and feature requests.
