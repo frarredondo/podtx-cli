@@ -55,7 +55,7 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
 | `podtx show <feed>` | Episode status for a feed |
 | `podtx sync [feed]` | Transcribe new episodes |
 | `podtx transcribe <target>` | One-shot RSS / URL / file |
-| `podtx format <json>` | Re-format existing transcript JSON (no ASR) |
+| `podtx format <json\|--feed\|--all>` | Re-format existing transcript JSON (no ASR) |
 
 ### Useful flags
 
@@ -78,6 +78,8 @@ Re-format an existing transcript without re-running ASR:
 
 ```bash
 podtx format path/to/episode.json --readable --cleanup
+podtx format --feed corecursive-coding-stories --readable --cleanup
+podtx format --all --readable --cleanup
 ```
 
 ## Data & config
