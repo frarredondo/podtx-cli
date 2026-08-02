@@ -16,7 +16,12 @@ from podtx.download import FFmpegNotFoundError, require_ffmpeg
 from podtx.engines import available_engines
 from podtx.models import Episode
 from podtx.pipeline import process_episodes, select_episodes_for_sync, transcribe_local_file
-from podtx.format_cmd import TranscriptJsonError, reformat_transcript
+from podtx.format_cmd import (
+    TranscriptJsonError,
+    discover_transcript_jsons,
+    reformat_many,
+    reformat_transcript,
+)
 from podtx.rss import FeedParseError, parse_feed, suggest_unique_slug
 
 app = typer.Typer(
@@ -443,7 +448,20 @@ def transcribe_cmd(
 
 @app.command("format")
 def format_cmd(
-    json_path: Path = typer.Argument(..., help="Existing podtx transcript .json file"),
+    json_path: Optional[Path] = typer.Argument(
+        None,
+        help="Existing podtx transcript .json file (omit when using --feed / --all)",
+    ),
+    feed: Optional[str] = typer.Option(
+        None,
+        "--feed",
+        help="Re-format all transcript JSON files for a feed slug",
+    ),
+    all_feeds: bool = typer.Option(
+        False,
+        "--all",
+        help="Re-format all transcript JSON files in the library",
+    ),
     readable: bool = typer.Option(
         False,
         "--readable",
@@ -460,27 +478,80 @@ def format_cmd(
     out_dir: Optional[Path] = typer.Option(
         None, "--out-dir", help="Output directory (default: same as JSON)"
     ),
+    data_dir: Optional[Path] = typer.Option(
+        None, "--data-dir", help="Override data directory (for --feed / --all)"
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
 ) -> None:
-    """Re-format an existing transcript JSON without re-running ASR."""
-    path = json_path.expanduser()
-    if not path.is_file():
-        err_console.print(f"[red]File not found:[/red] {path}")
+    """Re-format existing transcript JSON without re-running ASR.
+
+    Target one file, one feed (`--feed`), or the whole library (`--all`).
+    """
+    modes = sum([json_path is not None, feed is not None, all_feeds])
+    if modes != 1:
+        err_console.print(
+            "[red]Specify exactly one of:[/red] a JSON path, `--feed <slug>`, or `--all`"
+        )
         raise typer.Exit(1)
 
     formats = tuple(format) if format else ("txt", "json")
+
+    if json_path is not None:
+        path = json_path.expanduser()
+        if not path.is_file():
+            err_console.print(f"[red]File not found:[/red] {path}")
+            raise typer.Exit(1)
+        try:
+            paths = reformat_transcript(
+                path,
+                out_dir=out_dir,
+                readable=readable,
+                cleanup=cleanup,
+                formats=formats,
+            )
+        except TranscriptJsonError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        if not quiet:
+            for p in paths:
+                console.print(f"[green]Wrote[/green] {p}")
+        return
+
+    settings = load_settings(data_dir=data_dir)
+    transcripts_root = settings.transcripts_dir()
     try:
-        paths = reformat_transcript(
-            path,
-            out_dir=out_dir,
-            readable=readable,
-            cleanup=cleanup,
-            formats=formats,
+        targets = discover_transcript_jsons(
+            transcripts_root,
+            feed=None if all_feeds else feed,
         )
     except TranscriptJsonError as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
+    if not targets:
+        err_console.print("[dim]No transcript JSON files found.[/dim]")
+        raise typer.Exit(1)
+
     if not quiet:
-        for p in paths:
+        scope = "all feeds" if all_feeds else f"feed {feed}"
+        console.print(f"[bold]Formatting {len(targets)} transcript(s)[/bold] ({scope})")
+
+    result = reformat_many(
+        targets,
+        out_dir=out_dir,
+        readable=readable,
+        cleanup=cleanup,
+        formats=formats,
+    )
+
+    if not quiet:
+        for p in result.written:
             console.print(f"[green]Wrote[/green] {p}")
+        for path, message in result.errors:
+            err_console.print(f"[red]Failed[/red] {path}: {message}")
+        console.print(
+            f"[bold]Done[/bold]: {result.ok} ok, {result.failed} failed"
+        )
+
+    if result.failed:
+        raise typer.Exit(1)
