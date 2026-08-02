@@ -24,6 +24,81 @@ def test_segments_to_paragraphs_breaks_on_gap() -> None:
     assert text == "Hello. World.\n\nNew paragraph."
 
 
+def test_segments_to_paragraphs_breaks_on_sentence_after_min_duration() -> None:
+    """When gaps are ~0, still paragraph at sentence ends once long enough."""
+    segments = [
+        Segment(0.0, 8.0, "First clause continues for a while"),
+        Segment(8.0, 16.0, "and then wraps up here."),
+        Segment(16.0, 24.0, "Next idea starts after the break"),
+        Segment(24.0, 32.0, "and finishes this second paragraph."),
+    ]
+    text = segments_to_paragraphs(
+        segments,
+        gap_seconds=0.8,
+        min_paragraph_seconds=15.0,
+        max_paragraph_seconds=60.0,
+        max_paragraph_words=200,
+    )
+    paras = text.split("\n\n")
+    assert len(paras) == 2
+    assert paras[0].endswith("here.")
+    assert "Next idea" in paras[1]
+
+
+def test_segments_to_paragraphs_force_break_on_max_seconds() -> None:
+    """Force a break when a paragraph runs too long without useful gaps."""
+    # No sentence punctuation; still must split by max duration.
+    segments = [
+        Segment(0.0, 20.0, "talking for a long stretch without ending"),
+        Segment(20.0, 40.0, "still going on and on about the topic"),
+        Segment(40.0, 55.0, "and somehow never stops for breath"),
+    ]
+    text = segments_to_paragraphs(
+        segments,
+        gap_seconds=0.8,
+        min_paragraph_seconds=10.0,
+        max_paragraph_seconds=35.0,
+        max_paragraph_words=500,
+    )
+    assert "\n\n" in text
+    assert len(text.split("\n\n")) >= 2
+
+
+def test_segments_to_paragraphs_force_break_on_max_words() -> None:
+    words = " ".join(f"word{i}" for i in range(80))
+    segments = [
+        Segment(0.0, 5.0, words),
+        Segment(5.0, 10.0, words),
+        Segment(10.0, 15.0, "tail end of the thought."),
+    ]
+    text = segments_to_paragraphs(
+        segments,
+        gap_seconds=0.8,
+        min_paragraph_seconds=100.0,
+        max_paragraph_seconds=100.0,
+        max_paragraph_words=100,
+    )
+    assert "\n\n" in text
+
+
+def test_segments_to_paragraphs_does_not_break_before_min_duration() -> None:
+    """Short early sentences should not create tiny paragraphs."""
+    segments = [
+        Segment(0.0, 1.0, "Hi."),
+        Segment(1.0, 2.0, "Hey."),
+        Segment(2.0, 3.5, "Welcome back."),
+    ]
+    text = segments_to_paragraphs(
+        segments,
+        gap_seconds=0.8,
+        min_paragraph_seconds=20.0,
+        max_paragraph_seconds=60.0,
+        max_paragraph_words=200,
+    )
+    assert "\n\n" not in text
+    assert text == "Hi. Hey. Welcome back."
+
+
 def test_body_text_raw_vs_readable() -> None:
     segments = [
         Segment(0.0, 1.0, "One."),
