@@ -25,6 +25,7 @@ all = [
 ]
 dev = [
     "pytest>=8.0.0",
+    "pytest-cov>=7.0.0",
 ]
 
 [project.scripts]
@@ -41,3 +42,15 @@ module-root = "src"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.coverage.run]
+branch = true
+source = ["podtx"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 0
+# Line/statement ratchet is enforced by scripts/check_coverage_ratchet.py
+# (branch coverage is measured and uploaded, but not gated yet).

@@ -195,8 +195,12 @@ def test_cli_format_feed(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0, result.stdout + result.stderr
-    assert "feed-a-ep" in result.stdout
-    body = (root / "feed-a" / "feed-a-ep.txt").read_text(encoding="utf-8")
+    # Don't assert basename substrings in stdout: Rich may soft-wrap long paths.
+    assert "1 ok" in result.stdout
+    assert "0 failed" in result.stdout
+    out_txt = root / "feed-a" / "feed-a-ep.txt"
+    assert out_txt.is_file()
+    body = out_txt.read_text(encoding="utf-8")
     assert "the the" not in body.lower()
 
 

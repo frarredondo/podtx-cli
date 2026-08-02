@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        # Unit tests mock engines and do not need Apple Silicon ML extras.
+        run: uv sync --extra dev
+
+      - name: Run unit tests with coverage
+        run: >
+          uv run pytest
+          --cov=podtx
+          --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-report=json:coverage.json
+
+      - name: Enforce statement coverage ratchet
+        env:
+          # Repo Actions variable (Settings → Secrets and variables → Actions → Variables).
+          # Falls back to 65 in the script if unset.
+          COVERAGE_RATCHET_MIN: ${{ vars.COVERAGE_RATCHET_MIN }}
+        run: uv run python scripts/check_coverage_ratchet.py
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          flags: unittests
+          name: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
