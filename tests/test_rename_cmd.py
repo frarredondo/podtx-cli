@@ -322,3 +322,132 @@ def test_cli_rename_requires_from_title_and_scope(tmp_path: Path) -> None:
     assert result.exit_code != 0
     result2 = runner.invoke(app, ["rename", "--from-title"])
     assert result2.exit_code != 0
+
+
+def test_plan_rename_returns_none_when_no_sibling_files(tmp_path: Path, monkeypatch) -> None:
+    from podtx.rename_cmd import plan_rename_from_title
+
+    json_path = _write_episode(
+        tmp_path,
+        basename="2026-03-15_000_ep-7-lonely",
+        title="Ep 7: Lonely",
+        episode_num=None,
+    )
+
+    def never_file(self: Path) -> bool:
+        return False
+
+    monkeypatch.setattr(Path, "is_file", never_file)
+    assert plan_rename_from_title(json_path) is None
+
+
+def test_rename_many_records_apply_errors(tmp_path: Path, monkeypatch) -> None:
+    from podtx import rename_cmd
+
+    json_path = _write_episode(
+        tmp_path,
+        basename="2026-03-15_000_ep-8-boom",
+        title="Ep 8: Boom",
+        episode_num=None,
+    )
+
+    def boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(rename_cmd, "apply_rename", boom)
+    result = rename_cmd.rename_many_from_title([json_path], dry_run=False)
+    assert result.ok == 0
+    assert result.failed == 1
+    assert "disk full" in result.errors[0][1]
+
+
+def test_cli_rename_unknown_feed_exits(tmp_path: Path) -> None:
+    (tmp_path / "transcripts").mkdir()
+    result = runner.invoke(
+        app,
+        ["rename", "--from-title", "--feed", "missing", "--data-dir", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "not found" in (result.stdout + result.stderr).lower()
+
+
+def test_cli_rename_no_targets_exits(tmp_path: Path) -> None:
+    (tmp_path / "transcripts").mkdir()
+    result = runner.invoke(
+        app,
+        ["rename", "--from-title", "--all", "--data-dir", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "no transcript" in (result.stdout + result.stderr).lower()
+
+
+def test_cli_rename_reports_skips_and_failures(tmp_path: Path) -> None:
+    feed_dir = tmp_path / "transcripts" / "feed-a"
+    feed_dir.mkdir(parents=True)
+    _write_episode(
+        feed_dir,
+        basename="2026-03-15_000_12-fixable",
+        title="12: Fixable",
+        episode_num=0,
+        guid="fixable",
+    )
+    _write_episode(
+        feed_dir,
+        basename="2026-03-15_000_no-number",
+        title="No Number Here",
+        episode_num=None,
+        guid="skip",
+    )
+    _write_episode(
+        feed_dir,
+        basename="2026-03-15_100_100-already-there",
+        title="100: Already There",
+        episode_num=100,
+        guid="exists",
+    )
+    _write_episode(
+        feed_dir,
+        basename="2026-03-15_000_100-already-there",
+        title="100: Already There",
+        episode_num=0,
+        guid="collide",
+    )
+    result = runner.invoke(
+        app,
+        ["rename", "--from-title", "--feed", "feed-a", "--data-dir", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    out = result.stdout + result.stderr
+    assert "Skipped" in out
+    assert "Failed" in out
+    # Rich may soft-wrap the summary line in narrow consoles.
+    assert "1 ok" in out
+    assert "skipped" in out
+    assert "failed" in out
+
+
+def test_cli_rename_quiet_suppresses_progress(tmp_path: Path) -> None:
+    feed_dir = tmp_path / "transcripts" / "feed-a"
+    feed_dir.mkdir(parents=True)
+    _write_episode(
+        feed_dir,
+        basename="2026-03-15_000_9-quiet",
+        title="9: Quiet",
+        episode_num=None,
+    )
+    result = runner.invoke(
+        app,
+        [
+            "rename",
+            "--from-title",
+            "--feed",
+            "feed-a",
+            "--data-dir",
+            str(tmp_path),
+            "--quiet",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "Renamed" not in result.stdout
+    assert "Done" not in result.stdout
+    assert (feed_dir / "2026-03-15_009_9-quiet.json").is_file()
