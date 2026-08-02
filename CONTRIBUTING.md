@@ -15,3 +15,9 @@ Please use an [issue template](https://github.com/frarredondo/podtx-cli/issues/n
 uv sync --extra all --extra dev
 uv run pytest
 ```
+
+### CI
+
+Pull requests and pushes to `main` run the **`test`** GitHub Actions job (`.github/workflows/ci.yml`): `uv sync --extra dev` then `uv run pytest` on Ubuntu. ML extras (`parakeet` / `whisper`) are not installed in CI; unit tests do not require them.
+
+Once the workflow has run at least once on `main`, you can mark **`test`** as a required status check on the Protect main ruleset.

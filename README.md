@@ -121,4 +121,6 @@ uv sync --extra all --extra dev
 uv run pytest
 ```
 
+CI runs the same unit suite on pull requests via the GitHub Actions job **`test`** (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to file bugs and feature requests.
