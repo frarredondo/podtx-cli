@@ -126,6 +126,6 @@ uv sync --extra all --extra dev
 uv run pytest
 ```
 
-CI runs the unit suite with coverage on pull requests via the GitHub Actions job **`test`** (see [CONTRIBUTING.md](CONTRIBUTING.md)). Statement coverage is ratcheted at **≥ 65%**; branch coverage is reported but not gated yet.
+CI runs the unit suite with coverage on pull requests via the GitHub Actions job **`test`** (see [CONTRIBUTING.md](CONTRIBUTING.md)). Statement coverage is ratcheted via repo variable **`COVERAGE_RATCHET_MIN`** (default 65%); branch coverage is reported but not gated yet.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to file bugs and feature requests.

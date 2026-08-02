@@ -41,6 +41,10 @@ jobs:
           --cov-report=json:coverage.json
 
       - name: Enforce statement coverage ratchet
+        env:
+          # Repo Actions variable (Settings → Secrets and variables → Actions → Variables).
+          # Falls back to 65 in the script if unset.
+          COVERAGE_RATCHET_MIN: ${{ vars.COVERAGE_RATCHET_MIN }}
         run: uv run python scripts/check_coverage_ratchet.py
 
       - name: Upload coverage to Codecov
@@ -50,5 +54,4 @@ jobs:
           flags: unittests
           name: unit
           token: ${{ secrets.CODECOV_TOKEN }}
-          # Don't fail the job if the token isn't set yet; ratchet already gated coverage.
-          fail_ci_if_error: false
+          fail_ci_if_error: true
