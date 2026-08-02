@@ -70,7 +70,8 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
   boundaries after ~20s, with a max ~45s / ~120 words so long Parakeet runs
   don’t stay as one wall of text (default is raw continuous text; JSON timestamps
   are always rounded)
-- `--cleanup` — strip `uh`/`um` and collapse consecutive word doubles in text outputs (JSON segments stay raw)
+- `--cleanup` — strip `uh`/`um` and collapse consecutive word/phrase doubles
+  (1–4 words, e.g. `the the`, `I think I think`) in text outputs (JSON segments stay raw)
 - `--out-dir` / `--data-dir` — override output or app data paths
 - `--quiet` — less terminal noise
 
