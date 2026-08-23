@@ -54,8 +54,8 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
 |---------|-------------|
 | `podtx add <rss-url>` | Register a feed |
 | `podtx remove <feed>` | Unregister by slug or URL |
-| `podtx feeds` | List registered feeds |
-| `podtx show <feed>` | Episode status for a feed |
+| `podtx feeds` | List registered feeds (counts, health, disk usage, last transcribed) |
+| `podtx show <feed>` | Feed health, counts, disk usage, and per-episode status |
 | `podtx sync [feed]` | Transcribe new episodes |
 | `podtx transcribe <target>` | One-shot RSS / URL / file |
 | `podtx format <json\|--feed\|--all>` | Re-format existing transcript JSON (no ASR) |
@@ -95,6 +95,32 @@ podtx rename --from-title --feed syntax-tasty-web-development-treats --dry-run
 podtx rename --from-title --feed syntax-tasty-web-development-treats
 podtx rename --from-title --all
 ```
+
+### Library status
+
+`podtx feeds` gives an at-a-glance library view; `d/p/e` is done/pending/error
+episode counts per feed:
+
+```
+$ podtx feeds
+Registered feeds
+Slug          Title         d/p/e  Status     Size    Last
+demo-podcast  Demo Podcast  3/1/1  unhealthy  3.5 KB  2026-08-23
+fresh-feed    Fresh Feed    0/0/0  empty      0 B     -
+```
+
+`podtx show <feed>` drills into one feed with the same summary plus the
+per-episode table:
+
+```
+$ podtx show demo-podcast
+Demo Podcast (demo-podcast) — unhealthy
+5 episodes: 3 done, 1 pending, 1 error · 3.5 KB · last transcribed 2026-08-23
+```
+
+Health: `healthy` = all episodes done, `unhealthy` = pending or error episodes,
+`empty` = no episodes recorded yet. `Size` is on-disk transcript usage for the
+feed; `Last` is the date of the most recent transcription.
 
 ## Data & config
 
