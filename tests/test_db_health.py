@@ -1,8 +1,6 @@
-"""Tests for new Database health-check query methods (TDD Cycle: Phase 1).
+"""Tests for Database health-check query methods used by `podtx doctor`.
 
 Methods tested:
-    - failed_guids(feed_id)
-    - pending_guids(feed_id)
     - empty_feeds()
     - feed_health_summary()
 """
@@ -15,89 +13,6 @@ from pathlib import Path
 import pytest
 
 from podtx.db import Database
-
-
-class TestFailedGuids:
-    """failed_guids(feed_id) should return only 'error' status GUIDs."""
-
-    def test_returns_only_error_guids(self, tmp_path: Path) -> None:
-        db = Database(tmp_path / "state.db")
-        feed = db.add_feed("https://example.com", "test-feed", "Test Feed")
-
-        # Insert mixed episodes
-        db.upsert_episode(
-            feed_id=feed.id, guid="g1", title="Ep 1", published_at=None,
-            episode_num=1, enclosure_url="http://x.mp3",
-        )
-        db.upsert_episode(
-            feed_id=feed.id, guid="g2", title="Ep 2", published_at=None,
-            episode_num=2, enclosure_url="http://x.mp3",
-        )
-        db.upsert_episode(
-            feed_id=feed.id, guid="g3", title="Ep 3", published_at=None,
-            episode_num=3, enclosure_url="http://x.mp3",
-        )
-
-        # Mark g1 as error, leave g2 pending, mark g3 done
-        db.mark_error(feed_id=feed.id, guid="g1", message="network fail")
-        db.mark_done(
-            feed_id=feed.id, guid="g3", engine="parakeet", model="test",
-            output_paths=[tmp_path / "out.txt"],
-        )
-
-        result = db.failed_guids(feed.id)
-        assert result == {"g1"}
-
-    def test_returns_empty_set_when_no_errors(self, tmp_path: Path) -> None:
-        db = Database(tmp_path / "state.db")
-        feed = db.add_feed("https://example.com", "clean-feed", "Clean Feed")
-        db.upsert_episode(
-            feed_id=feed.id, guid="g1", title="Ep 1", published_at=None,
-            episode_num=1, enclosure_url="http://x.mp3",
-        )
-
-        assert db.failed_guids(feed.id) == set()
-
-
-class TestPendingGuids:
-    """pending_guids(feed_id) should return only 'pending' status GUIDs."""
-
-    def test_returns_only_pending_guids(self, tmp_path: Path) -> None:
-        db = Database(tmp_path / "state.db")
-        feed = db.add_feed("https://example.com", "test-feed", "Test Feed")
-
-        db.upsert_episode(
-            feed_id=feed.id, guid="g1", title="Ep 1", published_at=None,
-            episode_num=1, enclosure_url="http://x.mp3",
-        )
-        db.upsert_episode(
-            feed_id=feed.id, guid="g2", title="Ep 2", published_at=None,
-            episode_num=2, enclosure_url="http://x.mp3",
-        )
-
-        # g1: pending (default), g2: done
-        db.mark_done(
-            feed_id=feed.id, guid="g2", engine="parakeet", model="test",
-            output_paths=[tmp_path / "out.txt"],
-        )
-
-        result = db.pending_guids(feed.id)
-        assert result == {"g1"}
-
-    def test_returns_empty_set_when_no_pending(self, tmp_path: Path) -> None:
-        db = Database(tmp_path / "state.db")
-        feed = db.add_feed("https://example.com", "done-feed", "Done Feed")
-
-        db.upsert_episode(
-            feed_id=feed.id, guid="g1", title="Ep 1", published_at=None,
-            episode_num=1, enclosure_url="http://x.mp3",
-        )
-        db.mark_done(
-            feed_id=feed.id, guid="g1", engine="parakeet", model="test",
-            output_paths=[tmp_path / "out.txt"],
-        )
-
-        assert db.pending_guids(feed.id) == set()
 
 
 class TestEmptyFeeds:
@@ -179,29 +94,27 @@ class TestFeedHealthSummary:
 
         summaries = db.feed_health_summary()
 
-        # Two feeds in results
+        # Two feeds in results, looked up by id so neither block depends on
+        # the result ordering.
         assert len(summaries) == 2
-
-        a_row = summaries[0]
-        b_row = summaries[1]
-
-        assert {a_row["feed_id"], b_row["feed_id"]} == {feed_a.id, feed_b.id}
+        by_id = {s["feed_id"]: s for s in summaries}
+        assert set(by_id) == {feed_a.id, feed_b.id}
 
         # Feed A: 2 done + 1 pending = 3 total, status=unhealthy
-        if summaries[0]["feed_id"] == feed_a.id:
-            assert summaries[0]["total_episodes"] == 3
-            assert summaries[0]["done_count"] == 2
-            assert summaries[0]["pending_count"] == 1
-            assert summaries[0]["error_count"] == 0
-            assert summaries[0]["health_status"] == "unhealthy"
+        a_row = by_id[feed_a.id]
+        assert a_row["total_episodes"] == 3
+        assert a_row["done_count"] == 2
+        assert a_row["pending_count"] == 1
+        assert a_row["error_count"] == 0
+        assert a_row["health_status"] == "unhealthy"
 
         # Feed B: 1 done + 1 error = 2 total, status=unhealthy
-        if summaries[0]["feed_id"] == feed_b.id:
-            assert summaries[0]["total_episodes"] == 2
-            assert summaries[0]["done_count"] == 1
-            assert summaries[0]["pending_count"] == 0
-            assert summaries[0]["error_count"] == 1
-            assert summaries[0]["health_status"] == "unhealthy"
+        b_row = by_id[feed_b.id]
+        assert b_row["total_episodes"] == 2
+        assert b_row["done_count"] == 1
+        assert b_row["pending_count"] == 0
+        assert b_row["error_count"] == 1
+        assert b_row["health_status"] == "unhealthy"
 
     def test_returns_healthy_when_all_done(self, tmp_path: Path) -> None:
         db = Database(tmp_path / "state.db")

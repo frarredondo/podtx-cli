@@ -12,6 +12,11 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _encode_output_paths(paths: list[Path]) -> str:
+    """Record output paths absolutely: readers run from a different cwd."""
+    return json.dumps([str(Path(p).expanduser().resolve()) for p in paths])
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -178,7 +183,7 @@ class Database:
             (
                 engine,
                 model,
-                json.dumps([str(p) for p in output_paths]),
+                _encode_output_paths(output_paths),
                 _utc_now(),
                 feed_id,
                 guid,
@@ -204,7 +209,7 @@ class Database:
             """,
             (
                 episode_num,
-                json.dumps([str(p) for p in output_paths]),
+                _encode_output_paths(output_paths),
                 feed_id,
                 guid,
             ),
@@ -241,23 +246,7 @@ class Database:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-    # ─── Health-check query helpers (Phase 1) ──────────────────────────────
-
-    def failed_guids(self, feed_id: int) -> set[str]:
-        """Return GUIDs of episodes whose status is 'error' for this feed."""
-        rows = self._conn.execute(
-            "SELECT guid FROM episodes WHERE feed_id = ? AND status = 'error'",
-            (feed_id,),
-        ).fetchall()
-        return {r["guid"] for r in rows}
-
-    def pending_guids(self, feed_id: int) -> set[str]:
-        """Return GUIDs of episodes whose status is 'pending' for this feed."""
-        rows = self._conn.execute(
-            "SELECT guid FROM episodes WHERE feed_id = ? AND status = 'pending'",
-            (feed_id,),
-        ).fetchall()
-        return {r["guid"] for r in rows}
+    # ─── Health-check queries behind `podtx doctor` ────────────────────────
 
     def empty_feeds(self) -> list[dict[str, object]]:
         """Return feeds that have zero episode records (never synced)."""

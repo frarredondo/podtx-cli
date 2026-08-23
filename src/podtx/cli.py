@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from podtx import __version__
@@ -245,10 +246,13 @@ def collect_doctor_report(db: Database) -> list[dict[str, object]]:
             elif status == "pending":
                 issue, detail = "pending", "not transcribed"
             else:  # done: sanity-check that recorded outputs still exist
+                # Only absolute records can be checked. Legacy rows hold paths
+                # relative to the cwd of the sync that wrote them, which is
+                # unknowable here — never report those as missing.
                 missing = [
                     p
                     for p in _parse_output_paths(row["output_paths_json"])
-                    if not Path(p).exists()
+                    if Path(p).is_absolute() and not Path(p).exists()
                 ]
                 if not missing:
                     continue
@@ -277,17 +281,26 @@ def doctor_cmd(
 
     Read-only check over the episode database. Lists episodes that failed
     or are still pending, feeds with no recorded episodes, and done
-    episodes whose output files no longer exist. Never mutates state and
-    always exits 0; it reports, it does not retry.
+    episodes whose output files no longer exist. Never creates or modifies
+    library state and always exits 0; it reports, it does not retry.
     """
     settings = load_settings(data_dir=data_dir)
-    with _open_db(settings) as db:
+    db_path = settings.state_db_path()
+    if not db_path.exists():
+        # Do not create a library here: a mistyped --data-dir must stay visible.
+        console.print(
+            f"[dim]No feeds registered — no library at {escape(str(db_path))}. "
+            "Use `podtx add <rss-url>`.[/dim]"
+        )
+        return
+    with Database(db_path) as db:
         feeds: dict[int, Feed] = {f.id: f for f in db.list_feeds()}
         if not feeds:
             console.print("[dim]No feeds registered. Use `podtx add <rss-url>`.[/dim]")
             return
         summaries = db.feed_health_summary()
         attention = collect_doctor_report(db)
+        empty_feed_ids = {int(f["id"]) for f in db.empty_feeds()}
 
     by_feed: dict[int, list[dict[str, object]]] = {}
     for row in attention:
@@ -304,14 +317,17 @@ def doctor_cmd(
     effective: dict[int, str] = {}
     for s in summaries:
         feed_id = int(s["feed_id"])
-        effective[feed_id] = (
-            "unhealthy" if by_feed.get(feed_id) else str(s["health_status"])
-        )
+        if feed_id in empty_feed_ids:
+            effective[feed_id] = "empty"
+        elif by_feed.get(feed_id):
+            effective[feed_id] = "unhealthy"
+        else:
+            effective[feed_id] = str(s["health_status"])
 
     for s in summaries:
         feed_id = int(s["feed_id"])
         feed = feeds.get(feed_id)
-        name = f"{s['title']} ({feed.slug})" if feed else str(s["title"])
+        name = escape(f"{s['title']} ({feed.slug})" if feed else str(s["title"]))
         parts = [
             f"{n} {issue}"
             for issue in ("failed", "pending", "missing outputs")
@@ -320,7 +336,7 @@ def doctor_cmd(
         total = int(s["total_episodes"])
         detail = (
             "no episodes yet — run `podtx sync`"
-            if total == 0
+            if feed_id in empty_feed_ids
             else (", ".join(parts) if parts else "ok")
         )
         health = effective[feed_id]
@@ -343,18 +359,22 @@ def doctor_cmd(
         for row in attention:
             color = issue_colors[str(row["issue"])]
             at.add_row(
-                str(row["feed_slug"]),
+                escape(str(row["feed_slug"])),
                 f"[{color}]{row['issue']}[/{color}]",
                 _episode_num_label(row["episode_num"]),
-                str(row["title"]),
-                str(row["detail"]),
+                escape(str(row["title"])),
+                escape(str(row["detail"])),
             )
         console.print(at)
-        feeds_needing = sum(1 for h in effective.values() if h != "healthy")
-        console.print(
-            f"[red]{feeds_needing} of {len(summaries)} feed(s) need attention[/] "
-            f"({len(attention)} episode(s))"
-        )
+
+    # Keyed off displayed status, not off `attention`: an empty feed has no
+    # episode rows to list but still needs attention.
+    feeds_needing = sum(1 for h in effective.values() if h != "healthy")
+    if feeds_needing:
+        line = f"[red]{feeds_needing} of {len(summaries)} feed(s) need attention[/]"
+        if attention:
+            line += f" ({len(attention)} episode(s))"
+        console.print(line)
     else:
         console.print(
             f"[green]All {len(summaries)} feed(s) healthy — nothing needs attention.[/green]"

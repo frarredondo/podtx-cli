@@ -300,3 +300,197 @@ class TestCollectDoctorReport:
         assert len(rows) == 1
         assert rows[0]["issue"] == "failed"
         assert rows[0]["detail"]  # non-empty fallback
+
+
+class TestDoctorRendersRecordedTextLiterally:
+    """Recorded text (ffmpeg stderr, titles, slugs) is data, never Rich markup.
+
+    ffmpeg stderr routinely contains bracketed tokens such as `[error]` or
+    `[out#0/wav @ 0x...]`. Interpreted as markup these are either swallowed
+    (destroying the diagnostic doctor exists to show) or, when they look like
+    a closing tag, raise MarkupError and break doctor's exit-0 contract.
+    """
+
+    def test_error_detail_with_bracketed_tokens_is_shown_literally(
+        self, tmp_path: Path
+    ) -> None:
+        db = _db(tmp_path)
+        feed = db.add_feed("https://a.com", "feed-a", "Feed A")
+        db.upsert_episode(
+            feed_id=feed.id, guid="g1", title="Ep 1",
+            published_at=None, episode_num=1, enclosure_url="http://x.mp3",
+        )
+        db.mark_error(feed_id=feed.id, guid="g1", message="[error] no [/a.mp3]")
+        db.close()
+
+        result = runner.invoke(
+            app, ["doctor", "--data-dir", str(tmp_path)], env={"COLUMNS": "200"}
+        )
+        assert result.exit_code == 0
+        flat = " ".join(result.stdout.split())
+        assert "[error]" in flat
+        assert "[/a.mp3]" in flat
+
+    def test_episode_title_with_markup_is_shown_literally(self, tmp_path: Path) -> None:
+        db = _db(tmp_path)
+        feed = db.add_feed("https://a.com", "feed-a", "Feed A")
+        db.upsert_episode(
+            feed_id=feed.id, guid="g1", title="Ep [b]one[/b]",
+            published_at=None, episode_num=1, enclosure_url="http://x.mp3",
+        )
+        db.mark_error(feed_id=feed.id, guid="g1", message="boom")
+        db.close()
+
+        result = runner.invoke(
+            app, ["doctor", "--data-dir", str(tmp_path)], env={"COLUMNS": "200"}
+        )
+        assert result.exit_code == 0
+        assert "Ep [b]one[/b]" in " ".join(result.stdout.split())
+
+    def test_feed_title_with_bracketed_token_is_shown_literally(
+        self, tmp_path: Path
+    ) -> None:
+        # RSS titles routinely carry bracketed tokens, e.g. "[explicit]", which
+        # Rich reads as a style tag and silently drops from the summary table.
+        db = _db(tmp_path)
+        feed = db.add_feed("https://a.com", "feed-a", "Show [explicit]")
+        db.upsert_episode(
+            feed_id=feed.id, guid="g1", title="Ep 1",
+            published_at=None, episode_num=1, enclosure_url="http://x.mp3",
+        )
+        db.mark_error(feed_id=feed.id, guid="g1", message="boom")
+        db.close()
+
+        result = runner.invoke(
+            app, ["doctor", "--data-dir", str(tmp_path)], env={"COLUMNS": "200"}
+        )
+        assert result.exit_code == 0
+        assert "[explicit]" in " ".join(result.stdout.split())
+
+
+class TestDoctorSummaryLineAgreesWithTable:
+    """The closing line must never contradict the per-feed table above it."""
+
+    def test_empty_feed_alone_is_not_reported_as_all_healthy(
+        self, tmp_path: Path
+    ) -> None:
+        db = _db(tmp_path)
+        feed_a = db.add_feed("https://a.com", "feed-a", "Feed A")
+        db.upsert_episode(
+            feed_id=feed_a.id, guid="g1", title="Ep 1",
+            published_at=None, episode_num=1, enclosure_url="http://x.mp3",
+        )
+        _done_with_existing_output(
+            db, tmp_path, feed_id=feed_a.id, guid="g1", name="ep1.txt"
+        )
+        db.add_feed("https://b.com", "feed-b", "Feed B")  # never synced
+        db.close()
+
+        result = runner.invoke(app, ["doctor", "--data-dir", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "nothing needs attention" not in result.stdout
+        assert "1 of 2 feed(s) need attention" in result.stdout
+
+
+class TestRecordedOutputPathsAreLocationIndependent:
+    """`--out-dir ./x` records a relative path; doctor may run from anywhere.
+
+    Whether an output file still exists cannot depend on the directory doctor
+    happens to be invoked from.
+    """
+
+    def test_relative_output_path_survives_a_change_of_directory(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        work = tmp_path / "work"
+        (work / "transcripts").mkdir(parents=True)
+        (work / "transcripts" / "ep.txt").write_text("hi", encoding="utf-8")
+
+        db = _db(tmp_path)
+        feed = db.add_feed("https://a.com", "feed-a", "Feed A")
+        db.upsert_episode(
+            feed_id=feed.id, guid="g1", title="Ep 1",
+            published_at=None, episode_num=1, enclosure_url="http://x.mp3",
+        )
+        monkeypatch.chdir(work)  # as `podtx sync --out-dir ./transcripts` would
+        db.mark_done(
+            feed_id=feed.id, guid="g1", engine="parakeet", model="test",
+            output_paths=[Path("transcripts/ep.txt")],
+        )
+
+        monkeypatch.chdir(tmp_path)  # doctor invoked from somewhere else
+        rows = collect_doctor_report(db)
+        db.close()
+
+        assert rows == []
+
+    def test_renamed_relative_output_path_survives_a_change_of_directory(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # `podtx rename ./transcripts/x.json` rewrites the recorded paths.
+        work = tmp_path / "work"
+        (work / "transcripts").mkdir(parents=True)
+        (work / "transcripts" / "ep007.txt").write_text("hi", encoding="utf-8")
+
+        db = _db(tmp_path)
+        feed = db.add_feed("https://a.com", "feed-a", "Feed A")
+        db.upsert_episode(
+            feed_id=feed.id, guid="g1", title="Ep 1",
+            published_at=None, episode_num=None, enclosure_url="http://x.mp3",
+        )
+        _done_with_existing_output(db, tmp_path, feed_id=feed.id, guid="g1")
+
+        monkeypatch.chdir(work)
+        assert db.update_episode_paths(
+            feed_id=feed.id, guid="g1", episode_num=7,
+            output_paths=[Path("transcripts/ep007.txt")],
+        )
+
+        monkeypatch.chdir(tmp_path)
+        rows = collect_doctor_report(db)
+        db.close()
+
+        assert rows == []
+
+    def test_legacy_relative_record_is_not_reported_as_missing(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # Rows written before paths were recorded absolutely: the base they
+        # were relative to is unknowable, so they cannot be claimed missing.
+        db = _db(tmp_path)
+        feed = db.add_feed("https://a.com", "feed-a", "Feed A")
+        db.upsert_episode(
+            feed_id=feed.id, guid="g1", title="Ep 1",
+            published_at=None, episode_num=1, enclosure_url="http://x.mp3",
+        )
+        _done_with_existing_output(db, tmp_path, feed_id=feed.id, guid="g1")
+        db._conn.execute(
+            "UPDATE episodes SET output_paths_json = ? WHERE guid = ?",
+            (json.dumps(["transcripts/ep.txt"]), "g1"),
+        )
+        db._conn.commit()
+
+        monkeypatch.chdir(tmp_path / "transcripts")
+        rows = collect_doctor_report(db)
+        db.close()
+
+        assert rows == []
+
+
+class TestDoctorNeverCreatesLibraryState:
+    """doctor inspects a library; it must not bring one into existence.
+
+    A mistyped `--data-dir` has to be visible as a missing library, not
+    silently answered with a freshly created empty one.
+    """
+
+    def test_missing_data_dir_is_reported_and_not_created(self, tmp_path: Path) -> None:
+        target = tmp_path / "typo-dir"
+
+        result = runner.invoke(app, ["doctor", "--data-dir", str(target)])
+
+        assert result.exit_code == 0
+        assert not target.exists()
+        assert "No feeds registered" in result.stdout
+        # The path inspected is named, so a typo is visible.
+        assert str(target) in "".join(result.stdout.split())
