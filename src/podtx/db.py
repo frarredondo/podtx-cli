@@ -284,7 +284,8 @@ class Database:
 
         Each row contains:
             feed_id, title, total_episodes, done_count, pending_count,
-            error_count, health_status (healthy | unhealthy | empty)
+            error_count, last_transcribed (ISO timestamp or None),
+            health_status (healthy | unhealthy | empty)
         """
         rows = self._conn.execute(
             """
@@ -294,7 +295,8 @@ class Database:
                 COALESCE(e.total, 0) AS total_episodes,
                 COALESCE(e.done_count, 0) AS done_count,
                 COALESCE(e.pending_count, 0) AS pending_count,
-                COALESCE(e.error_count, 0) AS error_count
+                COALESCE(e.error_count, 0) AS error_count,
+                e.last_transcribed
             FROM feeds f
             LEFT JOIN (
                 SELECT
@@ -302,6 +304,7 @@ class Database:
                     SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count,
                     SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
                     SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count,
+                    MAX(transcribed_at) AS last_transcribed,
                     COUNT(*) AS total
                 FROM episodes
                 GROUP BY feed_id
@@ -328,6 +331,7 @@ class Database:
                 "done_count": done,
                 "pending_count": pending,
                 "error_count": errors,
+                "last_transcribed": r["last_transcribed"],
                 "health_status": health,
             })
         return result

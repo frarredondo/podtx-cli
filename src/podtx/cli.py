@@ -144,23 +144,60 @@ def remove_feed(
     console.print(f"[green]Removed[/green] {feed}")
 
 
+def _health_style(status: str) -> str:
+    return {
+        "healthy": "[green]healthy[/green]",
+        "unhealthy": "[yellow]unhealthy[/yellow]",
+        "empty": "[dim]empty[/dim]",
+    }.get(status, status)
+
+
+def _human_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{num_bytes} B"  # unreachable
+
+
+def _dir_size(root: Path) -> int:
+    if not root.is_dir():
+        return 0
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+
 @app.command("feeds")
 def list_feeds(
     data_dir: Optional[Path] = typer.Option(None, "--data-dir"),
 ) -> None:
-    """List registered feeds."""
+    """List registered feeds with episode counts (d/p/e = done/pending/error), health, and disk usage."""
     settings = load_settings(data_dir=data_dir)
     with _open_db(settings) as db:
         feeds = db.list_feeds()
+        summaries = {int(s["feed_id"]): s for s in db.feed_health_summary()}
     if not feeds:
         console.print("[dim]No feeds registered. Use `podtx add <rss-url>`.[/dim]")
         return
     table = Table(title="Registered feeds")
     table.add_column("Slug")
     table.add_column("Title")
-    table.add_column("URL")
+    table.add_column("d/p/e", justify="right")
+    table.add_column("Status")
+    table.add_column("Size", justify="right")
+    table.add_column("Last")
     for f in feeds:
-        table.add_row(f.slug, f.title, f.url)
+        s = summaries.get(f.id, {})
+        last = s.get("last_transcribed")
+        counts = f"{s.get('done_count', 0)}/{s.get('pending_count', 0)}/{s.get('error_count', 0)}"
+        table.add_row(
+            f.slug,
+            f.title,
+            counts,
+            _health_style(str(s.get("health_status", "empty"))),
+            _human_size(_dir_size(settings.transcripts_dir(f.slug))),
+            str(last)[:10] if last else "-",
+        )
     console.print(table)
 
 
@@ -169,16 +206,38 @@ def show_feed(
     feed: str = typer.Argument(..., help="Feed slug or URL"),
     data_dir: Optional[Path] = typer.Option(None, "--data-dir"),
 ) -> None:
-    """List known episodes and transcription status for a feed."""
+    """Show feed health, episode counts, disk usage, and per-episode status."""
     settings = load_settings(data_dir=data_dir)
     with _open_db(settings) as db:
         f = db.get_feed(feed)
         if not f:
             err_console.print(f"[red]Feed not found:[/red] {feed}")
             raise typer.Exit(1)
+        summary = next(
+            (s for s in db.feed_health_summary() if int(s["feed_id"]) == f.id), None
+        )
         rows = db.list_episodes(f.id)
 
-    table = Table(title=f"{f.title} ({f.slug})")
+    s = summary or {}
+    total = int(s.get("total_episodes", 0))
+    console.print(
+        f"[bold]{f.title} ({f.slug})[/bold] — "
+        f"{_health_style(str(s.get('health_status', 'empty')))}"
+    )
+    if total == 0:
+        console.print("[dim]No episodes recorded yet. Run `podtx sync`.[/dim]")
+        return
+
+    bits = [
+        f"{total} episodes: {s.get('done_count', 0)} done, "
+        f"{s.get('pending_count', 0)} pending, {s.get('error_count', 0)} error",
+        f"{_human_size(_dir_size(settings.transcripts_dir(f.slug)))}",
+    ]
+    last = s.get("last_transcribed")
+    bits.append(f"last transcribed {str(last)[:10]}" if last else "never transcribed")
+    console.print(" · ".join(bits))
+
+    table = Table(title="Episodes")
     table.add_column("Status")
     table.add_column("Date")
     table.add_column("Ep")
@@ -190,10 +249,7 @@ def show_feed(
             str(row["episode_num"] if row["episode_num"] is not None else "000"),
             row["title"],
         )
-    if not rows:
-        console.print("[dim]No episodes recorded yet. Run `podtx sync`.[/dim]")
-    else:
-        console.print(table)
+    console.print(table)
 
 
 @app.command("sync")
