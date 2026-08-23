@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,7 @@ from podtx.config import Settings, ensure_data_dirs, load_settings
 from podtx.db import Database
 from podtx.download import FFmpegNotFoundError, require_ffmpeg
 from podtx.engines import available_engines
-from podtx.models import Episode
+from podtx.models import Episode, Feed
 from podtx.pipeline import process_episodes, select_episodes_for_sync, transcribe_local_file
 from podtx.format_cmd import (
     TranscriptJsonError,
@@ -194,6 +195,170 @@ def show_feed(
         console.print("[dim]No episodes recorded yet. Run `podtx sync`.[/dim]")
     else:
         console.print(table)
+
+
+def _episode_num_label(episode_num: object) -> str:
+    return str(episode_num) if episode_num is not None else "000"
+
+
+def _error_detail(paths_json: str | None) -> str:
+    """Extract the recorded error message for an 'error' episode, if any."""
+    if not paths_json:
+        return "unknown error"
+    try:
+        payload = json.loads(paths_json)
+    except json.JSONDecodeError:
+        return "unknown error"
+    if isinstance(payload, dict):
+        message = payload.get("error")
+        if message:
+            return str(message)
+    return "unknown error"
+
+
+def _parse_output_paths(paths_json: str | None) -> list[str]:
+    """Parse recorded output paths; unparseable records yield no paths."""
+    if not paths_json:
+        return []
+    try:
+        payload = json.loads(paths_json)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, list):
+        return [str(p) for p in payload]
+    return []
+
+
+def collect_doctor_report(db: Database) -> list[dict[str, object]]:
+    """Collect per-episode rows that need attention across all feeds.
+
+    Row keys: feed_id, feed_title, feed_slug, guid, episode_num, title,
+    issue ("failed" | "pending" | "missing outputs"), detail.
+    """
+    feeds = {f.id: f for f in db.list_feeds()}
+    rows: list[dict[str, object]] = []
+    for feed_id, feed in feeds.items():
+        for row in db.list_episodes(feed_id):
+            status = row["status"]
+            if status == "error":
+                issue, detail = "failed", _error_detail(row["output_paths_json"])
+            elif status == "pending":
+                issue, detail = "pending", "not transcribed"
+            else:  # done: sanity-check that recorded outputs still exist
+                missing = [
+                    p
+                    for p in _parse_output_paths(row["output_paths_json"])
+                    if not Path(p).exists()
+                ]
+                if not missing:
+                    continue
+                issue = "missing outputs"
+                detail = ", ".join(Path(p).name for p in missing)
+            rows.append({
+                "feed_id": feed_id,
+                "feed_title": feed.title,
+                "feed_slug": feed.slug,
+                "guid": row["guid"],
+                "episode_num": row["episode_num"],
+                "title": row["title"],
+                "issue": issue,
+                "detail": detail,
+            })
+    return rows
+
+
+@app.command("doctor")
+def doctor_cmd(
+    data_dir: Optional[Path] = typer.Option(
+        None, "--data-dir", help="Override data directory"
+    ),
+) -> None:
+    """Report library health: failed, stuck, and missing transcripts.
+
+    Read-only check over the episode database. Lists episodes that failed
+    or are still pending, feeds with no recorded episodes, and done
+    episodes whose output files no longer exist. Never mutates state and
+    always exits 0; it reports, it does not retry.
+    """
+    settings = load_settings(data_dir=data_dir)
+    with _open_db(settings) as db:
+        feeds: dict[int, Feed] = {f.id: f for f in db.list_feeds()}
+        if not feeds:
+            console.print("[dim]No feeds registered. Use `podtx add <rss-url>`.[/dim]")
+            return
+        summaries = db.feed_health_summary()
+        attention = collect_doctor_report(db)
+
+    by_feed: dict[int, list[dict[str, object]]] = {}
+    for row in attention:
+        by_feed.setdefault(int(row["feed_id"]), []).append(row)
+
+    health_colors = {"healthy": "green", "unhealthy": "red", "empty": "yellow"}
+    table = Table(title="Library health")
+    table.add_column("Feed")
+    table.add_column("Status")
+    table.add_column("Episodes")
+    table.add_column("Detail")
+    # Escalate display status: a feed with missing outputs is 'done' in the
+    # database, but missing transcripts still count as needing attention.
+    effective: dict[int, str] = {}
+    for s in summaries:
+        feed_id = int(s["feed_id"])
+        effective[feed_id] = (
+            "unhealthy" if by_feed.get(feed_id) else str(s["health_status"])
+        )
+
+    for s in summaries:
+        feed_id = int(s["feed_id"])
+        feed = feeds.get(feed_id)
+        name = f"{s['title']} ({feed.slug})" if feed else str(s["title"])
+        parts = [
+            f"{n} {issue}"
+            for issue in ("failed", "pending", "missing outputs")
+            if (n := sum(1 for r in by_feed.get(feed_id, []) if r["issue"] == issue))
+        ]
+        total = int(s["total_episodes"])
+        detail = (
+            "no episodes yet — run `podtx sync`"
+            if total == 0
+            else (", ".join(parts) if parts else "ok")
+        )
+        health = effective[feed_id]
+        table.add_row(
+            name,
+            f"[{health_colors[health]}]{health}[/{health_colors[health]}]",
+            f"{s['done_count']}/{total} done",
+            detail,
+        )
+    console.print(table)
+
+    if attention:
+        issue_colors = {"failed": "red", "pending": "yellow", "missing outputs": "red"}
+        at = Table(title="Needs attention")
+        at.add_column("Feed")
+        at.add_column("Issue")
+        at.add_column("Ep")
+        at.add_column("Title")
+        at.add_column("Detail")
+        for row in attention:
+            color = issue_colors[str(row["issue"])]
+            at.add_row(
+                str(row["feed_slug"]),
+                f"[{color}]{row['issue']}[/{color}]",
+                _episode_num_label(row["episode_num"]),
+                str(row["title"]),
+                str(row["detail"]),
+            )
+        console.print(at)
+        feeds_needing = sum(1 for h in effective.values() if h != "healthy")
+        console.print(
+            f"[red]{feeds_needing} of {len(summaries)} feed(s) need attention[/] "
+            f"({len(attention)} episode(s))"
+        )
+    else:
+        console.print(
+            f"[green]All {len(summaries)} feed(s) healthy — nothing needs attention.[/green]"
+        )
 
 
 @app.command("sync")

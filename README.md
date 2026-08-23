@@ -56,6 +56,7 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
 | `podtx remove <feed>` | Unregister by slug or URL |
 | `podtx feeds` | List registered feeds |
 | `podtx show <feed>` | Episode status for a feed |
+| `podtx doctor` | Library health: failed / stuck episodes, empty feeds, missing outputs |
 | `podtx sync [feed]` | Transcribe new episodes |
 | `podtx transcribe <target>` | One-shot RSS / URL / file |
 | `podtx format <json\|--feed\|--all>` | Re-format existing transcript JSON (no ASR) |
@@ -94,6 +95,13 @@ when the title embeds a clear number (same rules as filename inference above):
 podtx rename --from-title --feed syntax-tasty-web-development-treats --dry-run
 podtx rename --from-title --feed syntax-tasty-web-development-treats
 podtx rename --from-title --all
+```
+
+Check library health — failed or still-pending episodes, feeds with no recorded
+episodes, and done episodes whose transcript files no longer exist (read-only):
+
+```bash
+podtx doctor
 ```
 
 ## Data & config
