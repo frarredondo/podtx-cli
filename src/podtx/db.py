@@ -12,6 +12,11 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _encode_output_paths(paths: list[Path]) -> str:
+    """Record output paths absolutely: readers run from a different cwd."""
+    return json.dumps([str(Path(p).expanduser().resolve()) for p in paths])
+
+
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -178,7 +183,7 @@ class Database:
             (
                 engine,
                 model,
-                json.dumps([str(p) for p in output_paths]),
+                _encode_output_paths(output_paths),
                 _utc_now(),
                 feed_id,
                 guid,
@@ -204,7 +209,7 @@ class Database:
             """,
             (
                 episode_num,
-                json.dumps([str(p) for p in output_paths]),
+                _encode_output_paths(output_paths),
                 feed_id,
                 guid,
             ),
@@ -240,3 +245,78 @@ class Database:
             title=row["title"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )
+
+    # ─── Health-check queries behind `podtx doctor` ────────────────────────
+
+    def empty_feeds(self) -> list[dict[str, object]]:
+        """Return feeds that have zero episode records (never synced)."""
+        rows = self._conn.execute(
+            "SELECT f.id, f.url, f.slug, f.title, f.created_at "
+            "FROM feeds f WHERE NOT EXISTS (\n"
+            "    SELECT 1 FROM episodes e WHERE e.feed_id = f.id\n"
+            ")"
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "url": r["url"],
+                "slug": r["slug"],
+                "title": r["title"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def feed_health_summary(self) -> list[dict[str, object]]:
+        """
+        Return a summary of each feed's episode status.
+
+        Each row contains:
+            feed_id, title, total_episodes, done_count, pending_count,
+            error_count, health_status (healthy | unhealthy | empty)
+        """
+        rows = self._conn.execute(
+            """
+            SELECT
+                f.id AS feed_id,
+                f.title,
+                COALESCE(e.total, 0) AS total_episodes,
+                COALESCE(e.done_count, 0) AS done_count,
+                COALESCE(e.pending_count, 0) AS pending_count,
+                COALESCE(e.error_count, 0) AS error_count
+            FROM feeds f
+            LEFT JOIN (
+                SELECT
+                    feed_id,
+                    SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done_count,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
+                    SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count,
+                    COUNT(*) AS total
+                FROM episodes
+                GROUP BY feed_id
+            ) e ON f.id = e.feed_id
+            ORDER BY f.title COLLATE NOCASE
+            """
+        ).fetchall()
+        result = []
+        for r in rows:
+            total = int(r["total_episodes"])
+            done = int(r["done_count"])
+            pending = int(r["pending_count"])
+            errors = int(r["error_count"])
+            if total == 0:
+                health = "empty"
+            elif errors > 0 or pending > 0:
+                health = "unhealthy"
+            else:
+                health = "healthy"
+            result.append({
+                "feed_id": r["feed_id"],
+                "title": r["title"],
+                "total_episodes": total,
+                "done_count": done,
+                "pending_count": pending,
+                "error_count": errors,
+                "health_status": health,
+            })
+        return result
