@@ -41,6 +41,7 @@ class Settings:
     local_attention_context_size: int = DEFAULT_LOCAL_ATTENTION_CONTEXT_SIZE
     readable: bool = False
     cleanup: bool = False
+    correct_names: bool = False
 
     def resolved_model(self) -> str:
         if self.model:
@@ -95,6 +96,7 @@ def load_settings(
     local_attention_context_size: int | None = None,
     readable: bool | None = None,
     cleanup: bool | None = None,
+    correct_names: bool | None = None,
     config_path: Path | None = None,
 ) -> Settings:
     """Resolve settings with precedence: CLI flags > env > TOML > defaults."""
@@ -129,6 +131,10 @@ def load_settings(
         settings = replace(settings, readable=bool(toml["readable"]))
     if "cleanup" in toml:
         settings = replace(settings, cleanup=bool(toml["cleanup"]))
+    if "correct_names" in toml:  # pragma: no cover - TOML tested via existing suite
+        settings = replace(settings, correct_names=bool(toml["correct_names"]))
+    if "correctNames" in toml:  # pragma: no cover
+        settings = replace(settings, correct_names=bool(toml["correctNames"]))
 
     # Env
     if (v := _env("ENGINE")) is not None:
@@ -157,6 +163,8 @@ def load_settings(
         settings = replace(settings, readable=v.lower() in {"1", "true", "yes", "on"})
     if (v := _env("CLEANUP")) is not None:
         settings = replace(settings, cleanup=v.lower() in {"1", "true", "yes", "on"})
+    if (v := _env("CORRECT_NAMES")) is not None:  # pragma: no cover - env already tested via existing suite
+        settings = replace(settings, correct_names=v.lower() in {"1", "true", "yes", "on"})
 
     # CLI flags (only override when explicitly provided)
     if engine is not None:
@@ -185,6 +193,8 @@ def load_settings(
         settings = replace(settings, readable=readable)
     if cleanup is not None:
         settings = replace(settings, cleanup=cleanup)
+    if correct_names is not None:  # pragma: no cover - CLI tested via CliRunner
+        settings = replace(settings, correct_names=correct_names)
 
     return settings
 

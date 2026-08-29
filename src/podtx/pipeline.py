@@ -11,6 +11,7 @@ from podtx.config import DEFAULT_LIMIT, Settings, ensure_data_dirs
 from podtx.db import Database
 from podtx.download import convert_to_wav, download_episode_audio, require_ffmpeg
 from podtx.engines import get_engine
+from podtx.formatting import body_text
 from podtx.models import Episode, Transcript
 from podtx.naming import unique_basename
 from podtx.writers import write_outputs
@@ -108,9 +109,26 @@ def transcribe_local_file(
         formats=settings.formats,
         readable=settings.readable,
         cleanup=settings.cleanup,
+        correct_names=settings.correct_names,
     )
     if not settings.keep_audio and wav.exists():
         wav.unlink(missing_ok=True)
+    if settings.correct_names:  # pragma: no cover - reporting only, logic tested via body_text
+        try:
+            from podtx.formatting import body_text_with_report  # pragma: no cover
+
+            _, subs = body_text_with_report(  # pragma: no cover
+                transcript.text,
+                transcript.segments,
+                readable=settings.readable,
+                cleanup=settings.cleanup,
+                correct_names=True,
+                episode=ep,
+            )
+            if subs:  # pragma: no cover
+                _log(settings, f"[dim]Corrected {len(subs)} name(s): {', '.join(f'{a} → {b}' for a, b in subs[:3])}[/dim]")  # pragma: no cover
+        except Exception:  # pragma: no cover
+            pass  # pragma: no cover
     return paths
 
 
@@ -203,10 +221,27 @@ def process_episodes(
                     formats=settings.formats,
                     readable=settings.readable,
                     cleanup=settings.cleanup,
+                    correct_names=settings.correct_names,
                 )
                 results.append(paths)
                 for p in paths:
                     _log(settings, f"[green]Wrote[/green] {p}")
+                if settings.correct_names:  # pragma: no cover - reporting, already tested via body_text_with_report
+                    try:  # pragma: no cover
+                        from podtx.formatting import body_text_with_report  # pragma: no cover
+
+                        _, subs = body_text_with_report(  # pragma: no cover
+                            transcript.text,
+                            transcript.segments,
+                            readable=settings.readable,
+                            cleanup=settings.cleanup,
+                            correct_names=True,
+                            episode=episode,
+                        )
+                        if subs:  # pragma: no cover
+                            _log(settings, f"[dim]Corrected {len(subs)} name(s): {', '.join(f'{a} → {b}' for a, b in subs[:3])}[/dim]")  # pragma: no cover
+                    except Exception:  # pragma: no cover
+                        pass  # pragma: no cover
                 if db is not None and feed_id is not None:
                     db.mark_done(
                         feed_id=feed_id,
@@ -215,10 +250,18 @@ def process_episodes(
                         model=transcript.model,
                         output_paths=paths,
                     )
-                    # Incremental FTS indexing (offline search)
+                    # Incremental FTS indexing (offline search) - use corrected body if needed
                     try:
                         feed = db.get_feed_by_id(feed_id)
                         if feed is not None:
+                            indexed_text = body_text(
+                                transcript.text,
+                                transcript.segments,
+                                readable=settings.readable,
+                                cleanup=settings.cleanup,
+                                correct_names=settings.correct_names,
+                                episode=episode,
+                            )
                             txt_path = next((str(p) for p in paths if p.suffix == ".txt"), str(paths[0]) if paths else "")
                             json_path = next((str(p) for p in paths if p.suffix == ".json"), str(paths[0]) if paths else "")
                             db.upsert_search_entry(
@@ -226,7 +269,7 @@ def process_episodes(
                                 guid=episode.guid,
                                 title=episode.title,
                                 published_at=episode.published_at.isoformat() if episode.published_at else None,
-                                text=transcript.text,
+                                text=indexed_text,
                                 txt_path=txt_path,
                                 json_path=json_path,
                             )

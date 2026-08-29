@@ -27,6 +27,7 @@ def write_outputs(
     formats: tuple[str, ...] | list[str],
     readable: bool = False,
     cleanup: bool = False,
+    correct_names: bool = False,
 ) -> list[Path]:
     paths: list[Path] = []
     for fmt in formats:
@@ -37,7 +38,7 @@ def write_outputs(
         path = out_dir / f"{basename}.{ext}"
         if key in {"txt", "json", "md"}:
             paths.append(
-                writer(path, episode, transcript, readable=readable, cleanup=cleanup)
+                writer(path, episode, transcript, readable=readable, cleanup=cleanup, correct_names=correct_names)
             )
         else:
             paths.append(writer(path, episode, transcript))
