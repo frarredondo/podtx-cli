@@ -93,3 +93,89 @@ def test_show_empty_feed_header(tmp_path: Path) -> None:
     assert "no episodes" in out
     assert "empty" in out
     assert "health" in out
+
+
+def test_feeds_healthy_and_no_pending(tmp_path: Path) -> None:
+    settings = load_settings(data_dir=tmp_path)
+    db = Database(settings.state_db_path())
+    feed = db.add_feed("https://example.com/healthy.xml", "healthy-feed", "Healthy Feed")
+    db.upsert_episode(feed_id=feed.id, guid="hg1", title="H1", published_at=None, episode_num=1, enclosure_url="https://x/h1.mp3")
+    db.mark_done(feed_id=feed.id, guid="hg1", engine="parakeet", model="m", output_paths=[tmp_path / "h1.txt"])
+    db.close()
+    # create transcript file to test size
+    tdir = settings.transcripts_dir("healthy-feed")
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / "f.txt").write_text("x" * 500)
+    result = runner.invoke(app, ["feeds", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    lower = " ".join(result.stdout.lower().split())
+    assert "1 done" in lower
+    assert "healthy" in lower
+
+
+def test_show_healthy_no_pending_queue(tmp_path: Path) -> None:
+    settings = load_settings(data_dir=tmp_path)
+    db = Database(settings.state_db_path())
+    feed = db.add_feed("https://example.com/h2.xml", "h2", "H2 Feed")
+    db.upsert_episode(feed_id=feed.id, guid="hg2", title="H2", published_at=None, episode_num=1, enclosure_url="https://x/h2.mp3")
+    db.mark_done(feed_id=feed.id, guid="hg2", engine="parakeet", model="m", output_paths=[tmp_path / "h2.txt"])
+    db.close()
+    result = runner.invoke(app, ["show", "h2", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    lower = " ".join(result.stdout.lower().split())
+    assert "healthy" in lower
+    # no pending queue when healthy
+    assert "pending queue" not in lower
+
+
+def test_human_size_branches(tmp_path: Path) -> None:
+    from podtx.cli import _human_size
+
+    assert _human_size(0) == "0 B"
+    assert _human_size(512) == "512 B"
+    assert _human_size(1024) == "1.0 KB"
+    assert _human_size(1536) == "1.5 KB"
+    assert _human_size(1024 * 1024) == "1.0 MB"
+    assert _human_size(1024 * 1024 * 5) == "5.0 MB"
+    assert _human_size(1024 * 1024 * 1024) == "1.0 GB"
+    assert _human_size(1024 * 1024 * 1024 * 2) == "2.0 GB"
+
+
+def test_transcript_disk_size_missing_dir(tmp_path: Path) -> None:
+    from podtx.cli import _transcript_disk_size
+
+    settings = load_settings(data_dir=tmp_path)
+    # no dir yet
+    assert _transcript_disk_size(settings, "nope") == 0
+
+
+def test_db_helpers_direct(tmp_path: Path) -> None:
+    settings = load_settings(data_dir=tmp_path)
+    db = Database(settings.state_db_path())
+    feed = db.add_feed("https://example.com/db.xml", "db-feed", "DB Feed")
+    # initially empty
+    assert db.failed_guids(feed.id) == set()
+    assert db.pending_guids(feed.id) == set()
+    assert db.last_transcribed_at(feed.id) is None
+    db.upsert_episode(feed_id=feed.id, guid="a", title="A", published_at=None, episode_num=1, enclosure_url="https://x/a.mp3")
+    assert "a" in db.pending_guids(feed.id)
+    db.mark_error(feed_id=feed.id, guid="a", message="oops")
+    assert "a" in db.failed_guids(feed.id)
+    assert "a" not in db.pending_guids(feed.id)
+    # after done, last_transcribed_at should be set
+    db.upsert_episode(feed_id=feed.id, guid="b", title="B", published_at=None, episode_num=2, enclosure_url="https://x/b.mp3")
+    db.mark_done(feed_id=feed.id, guid="b", engine="e", model="m", output_paths=[tmp_path / "b.txt"])
+    assert db.last_transcribed_at(feed.id) is not None
+    db.close()
+
+
+def test_feeds_no_feeds_registered(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["feeds", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "no feeds" in result.stdout.lower()
+
+
+def test_show_feed_not_found(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["show", "missing", "--data-dir", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "not found" in (result.stdout + result.stderr).lower()
