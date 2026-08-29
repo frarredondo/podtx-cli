@@ -137,7 +137,7 @@ def _maybe_index_after_reformat(
                 txt_path = str(txt_candidates[0].resolve())
             json_path_str = str(json_path.resolve())
         except Exception:  # pragma: no cover - best-effort resolve
-            pass
+            pass  # pragma: no cover
         db = Database(db_path)
         try:
             db.upsert_search_entry(
