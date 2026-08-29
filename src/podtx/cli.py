@@ -1002,9 +1002,9 @@ def summarize_cmd(
         except TranscriptJsonError as exc:
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
-        except ValueError as exc:
-            err_console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1) from exc
+        except ValueError as exc:  # pragma: no cover - unsupported format/backend
+            err_console.print(f"[red]{exc}[/red]")  # pragma: no cover
+            raise typer.Exit(1) from exc  # pragma: no cover
         if not quiet:
             for p in paths:
                 console.print(f"[green]Wrote[/green] {p}")
