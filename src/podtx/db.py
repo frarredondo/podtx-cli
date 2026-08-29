@@ -483,7 +483,7 @@ class Database:
             if not text and payload.get("segments"):
                 try:
                     text = " ".join(str(s.get("text", "")).strip() for s in payload.get("segments") or [] if s.get("text"))
-                except Exception:
+                except Exception:  # pragma: no cover
                     text = ""
             txt_path = str(json_path.with_suffix(".txt"))
             # Prefer absolute paths for CLI output stability

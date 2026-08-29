@@ -579,3 +579,92 @@ def test_cli_format_batch_with_segments_no_text(tmp_path: Path) -> None:
     (out_dir / "seg.txt").write_text("segment keyword fallback")
     result = runner.invoke(app, ["format", "--feed", "myfeed", "--data-dir", str(data_dir)])
     assert result.exit_code == 0, result.stdout + result.stderr
+
+
+# ── Seams for patch coverage: segments fallback + reindex edge cases ──
+
+def _fake_episode(**overrides) -> Episode:
+    """Fake Episode builder — prefers fakes vs mocks."""
+    base = dict(guid="fake-g", title="Fake Title", enclosure_url="https://x/f.mp3", show_title="Fake Show")
+    base.update(overrides)
+    return Episode(**base)
+
+
+def _fake_transcript(text: str = "fake text", engine: str = "fake", model: str = "fake") -> Transcript:
+    return Transcript(text=text, segments=[], language="en", model=model, engine=engine)
+
+
+def test_db_reindex_segments_fallback_via_fake(tmp_path: Path) -> None:
+    """db.reindex segments fallback line via fake transcript JSON — seam: reindex_search."""
+    db = Database(tmp_path / "db.db")
+    db.add_feed("https://example.com/f.xml", "fake-feed", "Fake Feed")
+    # Fake library on disk: JSON has empty text but segments
+    root = tmp_path / "transcripts" / "fake-feed"
+    root.mkdir(parents=True)
+    payload = {"guid": "fake-g-seg", "title": "Fake Seg", "segments": [{"text": "segments fallback unique 999", "start": 0, "end": 1}], "date": "2026-01-01T00:00:00+00:00"}
+    (root / "fake.json").write_text(json.dumps(payload))
+    (root / "fake.txt").write_text("segments fallback unique 999")
+    count = db.reindex_search(tmp_path / "transcripts")
+    assert count >= 1
+    hits = db.search_transcripts("fallback")
+    assert len(hits) >= 1
+    db.close()
+
+
+def test_db_reindex_bad_segments_via_fake(tmp_path: Path) -> None:
+    """db.reindex bad segments payload — seam: reindex_search exception branch."""
+    db = Database(tmp_path / "db.db")
+    db.add_feed("https://example.com/f.xml", "f", "F")
+    root = tmp_path / "transcripts" / "f"
+    root.mkdir(parents=True)
+    # segments is not a list of dicts — triggers inner except
+    payload = {"guid": "g-bad", "title": "Bad", "text": "", "segments": "not-a-list", "date": "2026-01-01T00:00:00+00:00"}
+    (root / "bad-seg.json").write_text(json.dumps(payload))
+    count = db.reindex_search(tmp_path / "transcripts")
+    assert count >= 1  # still counts, text falls back to ""
+    db.close()
+
+
+def test_cli_format_single_file_segments_fallback_via_fake(tmp_path: Path) -> None:
+    """cli format single-file indexing: segments fallback line via fake JSON."""
+    from podtx.config import load_settings
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/feed.xml", "myfeed", "My Feed")
+    db.close()
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    # Fake JSON: empty text, segments present — hits the `if not text_sf and segments` line
+    payload = {"guid": "fake-g-single", "title": "Fake Single", "segments": [{"text": "single segments unique 888", "start": 0, "end": 1}], "date": "2026-02-01T00:00:00+00:00", "text": ""}
+    (src_dir / "fake-single.json").write_text(json.dumps(payload))
+    (src_dir / "fake-single.txt").write_text("single segments unique 888")
+    json_path = src_dir / "fake-single.json"
+    result = runner.invoke(app, ["format", str(json_path), "--data-dir", str(data_dir)])
+    assert result.exit_code == 0, result.stdout + result.stderr
+
+
+def test_cli_format_batch_segments_fallback_via_fake(tmp_path: Path) -> None:
+    """cli format batch indexing: segments fallback line via fake library."""
+    from podtx.config import load_settings
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/feed.xml", "myfeed", "My Feed")
+    db.close()
+    out_dir = data_dir / "transcripts" / "myfeed"
+    out_dir.mkdir(parents=True)
+    payload = {"guid": "fake-g-batch", "title": "Fake Batch", "segments": [{"text": "batch segments unique 777", "start": 0, "end": 1}], "date": "2026-01-01T00:00:00+00:00", "text": ""}
+    (out_dir / "fake-batch.json").write_text(json.dumps(payload))
+    (out_dir / "fake-batch.txt").write_text("batch segments unique 777")
+    result = runner.invoke(app, ["format", "--feed", "myfeed", "--data-dir", str(data_dir)])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    db2 = Database(settings.state_db_path())
+    hits = db2.search_transcripts("unique")
+    assert len(hits) >= 1
+    db2.close()
+

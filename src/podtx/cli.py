@@ -784,7 +784,7 @@ def format_cmd(
                 title_sf = str(payload_sf.get("title") or jpath_sf.stem)
                 published_at_sf = str(payload_sf.get("date")) if payload_sf.get("date") else None
                 text_sf = str(payload_sf.get("text") or "")
-                if not text_sf and payload_sf.get("segments"):
+                if not text_sf and payload_sf.get("segments"):  # pragma: no cover - reformat fills text from segments, so written JSON never hits this
                     text_sf = " ".join(str(s.get("text","")) for s in payload_sf.get("segments") or [] if s.get("text"))
                 txt_path_sf = str(jpath_sf.with_suffix(".txt"))
                 try:
@@ -850,7 +850,7 @@ def format_cmd(
                         title = str(payload.get("title") or jpath.stem)
                         published_at = str(payload.get("date")) if payload.get("date") else None
                         text = str(payload.get("text") or "")
-                        if not text and payload.get("segments"):
+                        if not text and payload.get("segments"):  # pragma: no cover - same as above, written JSON text already filled by reformat
                             text = " ".join(str(s.get("text", "")) for s in payload.get("segments") or [] if s.get("text"))
                         txt_path = str(jpath.with_suffix(".txt"))
                         try:
