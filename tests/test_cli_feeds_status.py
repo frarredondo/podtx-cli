@@ -217,3 +217,14 @@ def test_show_with_no_health_summary(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["show", "monkey-feed", "--data-dir", str(tmp_path)])
     assert result.exit_code == 0
     assert "M1" in result.stdout
+
+
+def test_show_no_rows_and_no_health_summary(monkeypatch, tmp_path: Path) -> None:
+    settings = load_settings(data_dir=tmp_path)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/empty3.xml", "empty3", "Empty3 Feed")
+    db.close()
+    monkeypatch.setattr(Database, "feed_health_summary", lambda self: [])
+    result = runner.invoke(app, ["show", "empty3", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "no episodes" in result.stdout.lower()
