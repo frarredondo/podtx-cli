@@ -52,6 +52,7 @@ def _settings_from_opts(
     readable: Optional[bool] = None,
     cleanup: Optional[bool] = None,
     correct_names: Optional[bool] = None,
+    trim_start: Optional[float] = None,
 ) -> Settings:
     return load_settings(
         engine=engine,
@@ -66,6 +67,7 @@ def _settings_from_opts(
         readable=readable,
         cleanup=cleanup,
         correct_names=correct_names,
+        trim_start=trim_start,
     )
 
 
@@ -496,8 +498,19 @@ def sync_feeds(
         "--correct-names",
         help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
     ),
+    trim_start: Optional[float] = typer.Option(
+        None,
+        "--trim-start",
+        help="Skip first N seconds of audio before transcription (e.g. --trim-start 20). "
+        "Default 0 (no trimming). Caveat: can delete substantive opening content — use only "
+        "when you know the feed's intro length. Requires re-transcription; `podtx format` "
+        "without ASR does not re-apply trimming. seconds",
+    ),
 ) -> None:
     """Download and transcribe new episodes for registered feeds."""
+    if trim_start is not None and trim_start < 0:  # pragma: no cover
+        err_console.print("[red]--trim-start must be >= 0[/red]")  # pragma: no cover
+        raise typer.Exit(1)  # pragma: no cover
     settings = _settings_from_opts(
         engine=engine,
         model=model,
@@ -511,6 +524,7 @@ def sync_feeds(
         readable=True if readable else None,
         cleanup=True if cleanup else None,
         correct_names=True if correct_names else None,
+        trim_start=trim_start,
     )
     settings = replace(
         settings,
@@ -630,8 +644,19 @@ def transcribe_cmd(
         "--correct-names",
         help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
     ),
+    trim_start: Optional[float] = typer.Option(
+        None,
+        "--trim-start",
+        help="Skip first N seconds of audio before transcription (e.g. --trim-start 20). "
+        "Default 0 (no trimming). Caveat: can delete substantive opening content — use only "
+        "when you know the feed's intro length. Requires re-transcription; `podtx format` "
+        "without ASR does not re-apply trimming. seconds",
+    ),
 ) -> None:
     """One-shot transcription of a feed, audio URL, or local file."""
+    if trim_start is not None and trim_start < 0:  # pragma: no cover
+        err_console.print("[red]--trim-start must be >= 0[/red]")  # pragma: no cover
+        raise typer.Exit(1)  # pragma: no cover
     settings = _settings_from_opts(
         engine=engine,
         model=model,
@@ -645,6 +670,7 @@ def transcribe_cmd(
         readable=True if readable else None,
         cleanup=True if cleanup else None,
         correct_names=True if correct_names else None,
+        trim_start=trim_start,
     )
     settings = replace(
         settings,
@@ -767,6 +793,9 @@ def format_cmd(
     """Re-format existing transcript JSON without re-running ASR.
 
     Target one file, one feed (`--feed`), or the whole library (`--all`).
+
+    Note: --trim-start is an audio operation that requires re-transcription;
+    `format` does not re-apply trimming.
     """
     modes = sum([json_path is not None, feed is not None, all_feeds])
     if modes != 1:
