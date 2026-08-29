@@ -511,3 +511,69 @@ def test_search_no_results_and_empty_db_cli(tmp_path: Path) -> None:
     result = runner.invoke(app, ["search", "nonexistentkeyword123", "--data-dir", str(data_dir)])
     assert result.exit_code == 0
     assert "No results" in result.stdout or "no" in result.stdout.lower()
+
+
+def test_cli_format_single_file_indexes_search(tmp_path: Path) -> None:
+    from podtx.config import load_settings
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/feed.xml", "myfeed", "My Feed")
+    db.close()
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    ep = _sample_episode(guid="g-search-idx", title="Search Idx", published_at=datetime(2026, 3, 15, tzinfo=timezone.utc))
+    tx = Transcript(text="format single file index keyword", segments=[], language="en", model="m", engine="e")
+    paths = _write_transcript(src_dir, "ep", ep, tx)
+    json_path = src_dir / "ep.json"
+    # Invoke format for single file with data-dir
+    result = runner.invoke(app, ["format", str(json_path), "--data-dir", str(data_dir)])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    # Check indexing happened via search
+    db2 = Database(settings.state_db_path())
+    hits = db2.search_transcripts("keyword")
+    assert len(hits) >= 1
+    db2.close()
+
+
+def test_cli_format_batch_indexes_search(tmp_path: Path) -> None:
+    from podtx.config import load_settings
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/feed.xml", "myfeed", "My Feed")
+    db.close()
+    out_dir = data_dir / "transcripts" / "myfeed"
+    out_dir.mkdir(parents=True)
+    ep = _sample_episode(guid="g-batch-idx", title="Batch Idx")
+    tx = Transcript(text="batch keyword for indexing", segments=[], language="en", model="m", engine="e")
+    _write_transcript(out_dir, "batch-ep", ep, tx)
+    result = runner.invoke(app, ["format", "--feed", "myfeed", "--data-dir", str(data_dir)])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    db2 = Database(settings.state_db_path())
+    hits = db2.search_transcripts("batch")
+    assert len(hits) >= 1
+    db2.close()
+
+
+def test_cli_format_batch_with_segments_no_text(tmp_path: Path) -> None:
+    from podtx.config import load_settings
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/feed.xml", "myfeed", "My Feed")
+    db.close()
+    out_dir = data_dir / "transcripts" / "myfeed"
+    out_dir.mkdir(parents=True)
+    # Create JSON with no text but segments
+    payload = {"guid": "g-seg-idx", "title": "Seg Idx", "segments": [{"text": "segment keyword fallback", "start": 0, "end": 1}], "date": "2026-01-01T00:00:00+00:00"}
+    (out_dir / "seg.json").write_text(json.dumps(payload))
+    (out_dir / "seg.txt").write_text("segment keyword fallback")
+    result = runner.invoke(app, ["format", "--feed", "myfeed", "--data-dir", str(data_dir)])
+    assert result.exit_code == 0, result.stdout + result.stderr
