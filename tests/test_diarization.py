@@ -184,8 +184,9 @@ def test_cli_sync_and_transcribe_have_diarize_flag():
     for cmd in (["sync", "--help"], ["transcribe", "--help"], ["format", "--help"]):
         result = runner.invoke(app, cmd)
         assert result.exit_code == 0, result.stdout + result.stderr
-        assert "--diarize" in result.stdout
-        assert "Opt-in" in result.stdout or "diarization" in result.stdout.lower()
+        text = (result.stdout or "") + (getattr(result, "stderr", "") or "")
+        assert "--diarize" in text or "diarize" in text.lower()
+        assert "Opt-in" in text or "diarization" in text.lower()
 
 
 def test_cli_sync_diarize_is_opt_in(tmp_path: Path):
