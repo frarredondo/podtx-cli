@@ -61,6 +61,7 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
 | `podtx transcribe <target>` | One-shot RSS / URL / file |
 | `podtx format <json\|--feed\|--all>` | Re-format existing transcript JSON (no ASR) |
 | `podtx rename --from-title --feed\|--all` | Fix `_000_` filenames from title episode numbers |
+| `podtx search <query> [--feed] [--limit] [--since] [--until] [--reindex]` | Offline FTS5 search over transcripts |
 
 ### Useful flags
 
