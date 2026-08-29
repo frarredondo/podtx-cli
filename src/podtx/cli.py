@@ -25,6 +25,7 @@ from podtx.format_cmd import (
     reformat_transcript,
 )
 from podtx.rename_cmd import rename_many_from_title
+from podtx.summarize import summarize_many, summarize_transcript
 from podtx.rss import FeedParseError, parse_feed, suggest_unique_slug
 
 app = typer.Typer(
@@ -912,6 +913,138 @@ def format_cmd(
         console.print(
             f"[bold]Done[/bold]: {result.ok} ok, {result.failed} failed"
         )
+
+    if result.failed:
+        raise typer.Exit(1)
+
+
+@app.command("summarize")
+def summarize_cmd(
+    json_path: Optional[Path] = typer.Argument(
+        None,
+        help="Existing podtx transcript .json file (omit when using --feed / --all)",
+    ),
+    feed: Optional[str] = typer.Option(
+        None,
+        "--feed",
+        help="Summarize all transcript JSON files for a feed slug",
+    ),
+    all_feeds: bool = typer.Option(
+        False,
+        "--all",
+        help="Summarize all transcript JSON files in the library",
+    ),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        "-n",
+        help="Max transcripts to summarize (for --feed / --all)",
+    ),
+    data_dir: Optional[Path] = typer.Option(
+        None, "--data-dir", help="Override data directory (for --feed / --all)"
+    ),
+    out_dir: Optional[Path] = typer.Option(
+        None, "--out-dir", help="Output directory (default: same as transcript JSON)"
+    ),
+    format: Optional[list[str]] = typer.Option(
+        None, "--format", "-f", help="Summary output format (repeatable): json, md (default: json)"
+    ),
+    backend: str = typer.Option(
+        "fake",
+        "--backend",
+        help="Summary backend (default: fake — offline extractive, no network; no silent external calls)",
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+) -> None:
+    """Summarize existing transcript JSON without re-running ASR (offline).
+
+    Reads one transcript JSON file, or all JSON files for a feed (`--feed`)
+    or the whole library (`--all`), and writes stable sidecar summaries alongside
+    each transcript (e.g. `episode.summary.json` / `episode.summary.md` with
+    overview, key points, and optional timestamped quotes). Uses an offline
+    extractive fake backend by default — no network, no external API.
+
+    Invocation: `podtx summarize <path/to/episode.json>`, `podtx summarize --feed <slug> [--limit N]`,
+    or `podtx summarize --all [--limit N]`. Output sidecars are written to the
+    same directory as the transcript JSON unless `--out-dir` is given. Use
+    `--format json` (default) and/or `--format md` to choose output format(s).
+    """
+    modes = sum([json_path is not None, feed is not None, all_feeds])
+    if modes != 1:
+        err_console.print(
+            "[red]Specify exactly one of:[/red] a JSON path, `--feed <slug>`, or `--all`"
+        )
+        raise typer.Exit(1)
+
+    if backend not in {"fake"}:
+        err_console.print(f"[red]Unknown backend:[/red] {backend} (only 'fake' available; offline, no network)")
+        raise typer.Exit(1)
+
+    formats = tuple(format) if format else ("json",)
+    # Validate formats early
+    for fmt in formats:
+        if fmt.lower().strip() not in {"json", "md"}:
+            err_console.print(f"[red]Unsupported format {fmt!r}. Choose from: json, md[/red]")
+            raise typer.Exit(1)
+
+    if json_path is not None:
+        path = json_path.expanduser()
+        if not path.is_file():
+            err_console.print(f"[red]File not found:[/red] {path}")
+            raise typer.Exit(1)
+        try:
+            paths = summarize_transcript(
+                path,
+                out_dir=out_dir,
+                formats=formats,
+                backend=backend,
+            )
+        except TranscriptJsonError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        except ValueError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        if not quiet:
+            for p in paths:
+                console.print(f"[green]Wrote[/green] {p}")
+        return
+
+    settings = load_settings(data_dir=data_dir)
+    transcripts_root = settings.transcripts_dir()
+    try:
+        targets = discover_transcript_jsons(
+            transcripts_root,
+            feed=None if all_feeds else feed,
+        )
+    except TranscriptJsonError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if not targets:
+        err_console.print("[dim]No transcript JSON files found.[/dim]")
+        raise typer.Exit(1)
+
+    if limit is not None:
+        targets = targets[:limit]
+
+    if not quiet:
+        scope = "all feeds" if all_feeds else f"feed {feed}"
+        console.print(f"[bold]Summarizing {len(targets)} transcript(s)[/bold] ({scope}, backend: {backend} — offline, no network)")
+
+    result = summarize_many(
+        targets,
+        out_dir=out_dir,
+        formats=formats,
+        backend=backend,
+    )
+
+    if not quiet:
+        for p in result.written:
+            console.print(f"[green]Wrote[/green] {p}")
+        for path, message in result.errors:
+            err_console.print(f"[red]Failed[/red] {path}: {message}")
+        console.print(f"[bold]Done[/bold]: {result.ok} ok, {result.failed} failed")
 
     if result.failed:
         raise typer.Exit(1)
