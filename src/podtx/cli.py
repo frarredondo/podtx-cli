@@ -51,6 +51,7 @@ def _settings_from_opts(
     local_attention_context_size: Optional[int] = None,
     readable: Optional[bool] = None,
     cleanup: Optional[bool] = None,
+    correct_names: Optional[bool] = None,
 ) -> Settings:
     return load_settings(
         engine=engine,
@@ -64,6 +65,7 @@ def _settings_from_opts(
         local_attention_context_size=local_attention_context_size,
         readable=readable,
         cleanup=cleanup,
+        correct_names=correct_names,
     )
 
 
@@ -489,6 +491,11 @@ def sync_feeds(
         "--cleanup",
         help="Strip fillers (uh/um) and collapse consecutive word doubles in text outputs",
     ),
+    correct_names: bool = typer.Option(
+        False,
+        "--correct-names",
+        help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
+    ),
 ) -> None:
     """Download and transcribe new episodes for registered feeds."""
     settings = _settings_from_opts(
@@ -503,6 +510,7 @@ def sync_feeds(
         local_attention_context_size=local_attention_context_size,
         readable=True if readable else None,
         cleanup=True if cleanup else None,
+        correct_names=True if correct_names else None,
     )
     settings = replace(
         settings,
@@ -510,6 +518,7 @@ def sync_feeds(
         keep_audio=keep_audio or settings.keep_audio,
         readable=readable or settings.readable,
         cleanup=cleanup or settings.cleanup,
+        correct_names=correct_names or settings.correct_names,
     )
 
     try:
@@ -616,6 +625,11 @@ def transcribe_cmd(
         "--cleanup",
         help="Strip fillers (uh/um) and collapse consecutive word doubles in text outputs",
     ),
+    correct_names: bool = typer.Option(
+        False,
+        "--correct-names",
+        help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
+    ),
 ) -> None:
     """One-shot transcription of a feed, audio URL, or local file."""
     settings = _settings_from_opts(
@@ -630,6 +644,7 @@ def transcribe_cmd(
         local_attention_context_size=local_attention_context_size,
         readable=True if readable else None,
         cleanup=True if cleanup else None,
+        correct_names=True if correct_names else None,
     )
     settings = replace(
         settings,
@@ -637,6 +652,7 @@ def transcribe_cmd(
         keep_audio=keep_audio or settings.keep_audio,
         readable=readable or settings.readable,
         cleanup=cleanup or settings.cleanup,
+        correct_names=correct_names or settings.correct_names,
     )
 
     try:
@@ -732,6 +748,11 @@ def format_cmd(
         "--cleanup",
         help="Strip fillers (uh/um) and collapse consecutive word doubles",
     ),
+    correct_names: bool = typer.Option(
+        False,
+        "--correct-names",
+        help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
+    ),
     format: Optional[list[str]] = typer.Option(
         None, "--format", "-f", help="Output format (repeatable): txt, json, srt, vtt, md"
     ),
@@ -767,6 +788,7 @@ def format_cmd(
                 out_dir=out_dir,
                 readable=readable,
                 cleanup=cleanup,
+                correct_names=correct_names,
                 formats=formats,
             )
         except TranscriptJsonError as exc:
@@ -807,6 +829,15 @@ def format_cmd(
         if not quiet:
             for p in paths:
                 console.print(f"[green]Wrote[/green] {p}")
+            if correct_names:
+                try:
+                    for jp in [p for p in paths if p.suffix.lower() == ".json"]:
+                        payload = json.loads(jp.read_text(encoding="utf-8"))
+                        corr = payload.get("corrections") or []
+                        if corr:
+                            console.print(f"[dim]Corrected {len(corr)} name(s) in {jp.name}: {', '.join(f'{a} → {b}' for a, b in corr[:3])}[/dim]")
+                except Exception:  # pragma: no cover
+                    pass  # pragma: no cover
         return
 
     settings = load_settings(data_dir=data_dir)
@@ -833,6 +864,7 @@ def format_cmd(
         out_dir=out_dir,
         readable=readable,
         cleanup=cleanup,
+        correct_names=correct_names,
         formats=formats,
     )
 

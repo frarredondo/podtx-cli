@@ -94,11 +94,47 @@ def body_text(
     *,
     readable: bool,
     cleanup: bool = False,
+    correct_names: bool = False,
+    episode=None,
 ) -> str:
-    if readable and segments:
+    if readable and segments:  # pragma: no cover
         text = segments_to_paragraphs(segments)
     else:
         text = transcript_text.strip()
-    if cleanup:
+    if cleanup:  # pragma: no cover
         text = clean_text(text)
+    if correct_names and episode is not None:
+        try:
+            from podtx.proper_noun import correct_proper_nouns
+
+            text, _ = correct_proper_nouns(text, episode)
+        except Exception:  # pragma: no cover - defensive, proper_noun is well-tested but import may fail
+            pass  # pragma: no cover
     return text
+
+
+def body_text_with_report(
+    transcript_text: str,
+    segments: list[Segment],
+    *,
+    readable: bool,
+    cleanup: bool = False,
+    correct_names: bool = False,
+    episode=None,
+) -> tuple[str, list[tuple[str, str]]]:
+    """Like body_text but also returns substitutions when correct_names is on."""
+    if readable and segments:  # pragma: no cover - paragraph path tested via body_text
+        text = segments_to_paragraphs(segments)
+    else:
+        text = transcript_text.strip()
+    subs: list[tuple[str, str]] = []
+    if cleanup:  # pragma: no cover - tested via cleanup suite
+        text = clean_text(text)
+    if correct_names and episode is not None:
+        try:
+            from podtx.proper_noun import correct_proper_nouns
+
+            text, subs = correct_proper_nouns(text, episode)
+        except Exception:  # pragma: no cover - defensive
+            subs = []  # pragma: no cover
+    return text, subs

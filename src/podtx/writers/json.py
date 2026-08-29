@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from podtx.formatting import body_text, round_ts
+from podtx.formatting import body_text, body_text_with_report, round_ts
 from podtx.models import Episode, Transcript
 
 
@@ -14,14 +14,29 @@ def write_json(
     *,
     readable: bool = False,
     cleanup: bool = False,
+    correct_names: bool = False,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = body_text(
-        transcript.text,
-        transcript.segments,
-        readable=readable,
-        cleanup=cleanup,
-    )
+    if correct_names:
+        payload_text, subs = body_text_with_report(
+            transcript.text,
+            transcript.segments,
+            readable=readable,
+            cleanup=cleanup,
+            correct_names=True,
+            episode=episode,
+        )
+        payload_subs: list[list[str]] = [[a, b] for a, b in subs]
+    else:
+        payload_text = body_text(
+            transcript.text,
+            transcript.segments,
+            readable=readable,
+            cleanup=cleanup,
+            correct_names=False,
+            episode=episode,
+        )
+        payload_subs = []
     payload = {
         "title": episode.title,
         "show": episode.show_title,
@@ -35,7 +50,7 @@ def write_json(
         "language": transcript.language,
         "readable": readable,
         "cleanup": cleanup,
-        "text": text,
+        "text": payload_text,
         "segments": [
             {
                 "start": round_ts(s.start),
@@ -45,5 +60,8 @@ def write_json(
             for s in transcript.segments
         ],
     }
+    if correct_names:
+        payload["correct_names"] = True
+        payload["corrections"] = payload_subs
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
