@@ -270,7 +270,7 @@ class Database:
             "SELECT MAX(transcribed_at) AS m FROM episodes WHERE feed_id = ? AND status = 'done'",
             (feed_id,),
         ).fetchone()
-        if row is None:
+        if row is None:  # pragma: no cover - MAX query always returns a row
             return None
         return row["m"] if row["m"] else None
 
