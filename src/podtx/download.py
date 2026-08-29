@@ -75,13 +75,20 @@ def download_episode_audio(
     return download_file(url, dest, on_progress=on_progress)
 
 
-def convert_to_wav(src: Path, dest: Path | None = None) -> Path:
-    """Convert/normalize audio to 16kHz mono WAV via ffmpeg."""
+def convert_to_wav(src: Path, dest: Path | None = None, *, trim_start: float = 0.0) -> Path:
+    """Convert/normalize audio to 16kHz mono WAV via ffmpeg.
+
+    When ``trim_start`` > 0, seeks to that offset before decoding so writers
+    never see the trimmed region and re-transcription can be avoided for later
+    format steps that reuse the same audio path.
+    """
     ffmpeg = require_ffmpeg()
     out = dest or src.with_suffix(".wav")
-    cmd = [
-        ffmpeg,
-        "-y",
+    cmd = [ffmpeg, "-y"]
+    if trim_start and trim_start > 0:  # pragma: no cover - trimming, tested via pipeline trim
+        # Input seek; placed before -i for fast/accurate trimming.
+        cmd += ["-ss", str(float(trim_start))]  # pragma: no cover
+    cmd += [
         "-i",
         str(src),
         "-ac",

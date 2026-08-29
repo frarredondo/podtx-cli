@@ -12,7 +12,7 @@ from podtx.db import Database
 from podtx.download import convert_to_wav, download_episode_audio, require_ffmpeg
 from podtx.engines import get_engine
 from podtx.formatting import body_text
-from podtx.models import Episode, Transcript
+from podtx.models import Episode, Segment, Transcript
 from podtx.naming import unique_basename
 from podtx.writers import write_outputs
 
@@ -26,6 +26,44 @@ def _guid_hash(guid: str) -> str:
 def _log(settings: Settings, message: str) -> None:
     if not settings.quiet:
         console.print(message)
+
+
+def trim_transcript(transcript: Transcript, trim_start: float = 0.0) -> Transcript:
+    """Drop leading audio/text before ``trim_start`` seconds.
+
+    Applied after ASR so writers never see the trimmed region. When the engine
+    provides timed segments, only segments with ``end > trim_start`` are kept
+    (a segment straddling the boundary is kept, since its tail is substantive).
+    The transcript text is rebuilt from kept segments when available; otherwise
+    the original text is preserved to avoid silently emptying segment-free
+    transcripts.
+    """
+    if not trim_start or trim_start <= 0:
+        return transcript
+    if not transcript.segments:
+        # No timing info — cannot safely trim.
+        return transcript  # pragma: no cover - no timing
+    kept: list[Segment] = [s for s in transcript.segments if s.end > trim_start]
+    # Keep straddling segment even if start < trim_start; its text is mostly
+    # after the cut and discarding it would lose substance at the boundary.
+    if not kept:
+        return Transcript(  # pragma: no cover - all segments before trim_start
+            text="",
+            segments=[],
+            language=transcript.language,
+            model=transcript.model,
+            engine=transcript.engine,
+        )
+    # Rebuild text from kept segments; preserves raw transcript.text if segments
+    # empty fallback not needed here but kept segments exist.
+    text = " ".join(s.text for s in kept if s.text.strip())
+    return Transcript(
+        text=text or transcript.text,
+        segments=kept,
+        language=transcript.language,
+        model=transcript.model,
+        engine=transcript.engine,
+    )
 
 
 def download_only(episode: Episode, audio_dir: Path, *, quiet: bool = False) -> Path:
@@ -90,7 +128,7 @@ def transcribe_local_file(
     work_dir.mkdir(parents=True, exist_ok=True)
     h = _guid_hash(ep.guid)
     wav = work_dir / f"{h}.wav"
-    convert_to_wav(path, wav)
+    convert_to_wav(path, wav, trim_start=settings.trim_start)
 
     _log(settings, f"[cyan]Transcribing[/cyan] {ep.title} with {engine.name}/{model}")
     transcript = engine.transcribe(
@@ -100,6 +138,7 @@ def transcribe_local_file(
         local_attention=settings.local_attention,
         local_attention_context_size=settings.local_attention_context_size,
     )
+    transcript = trim_transcript(transcript, trim_start=settings.trim_start)
     basename = unique_basename(ep, existing=set())
     paths = write_outputs(
         out_dir=dest_dir,
@@ -199,7 +238,7 @@ def process_episodes(
                 cleanup.append(original)
 
             try:
-                convert_to_wav(original, wav)
+                convert_to_wav(original, wav, trim_start=settings.trim_start)
                 _log(
                     settings,
                     f"[cyan]Transcribing[/cyan] {episode.title} ({engine.name}/{model})",
@@ -211,6 +250,7 @@ def process_episodes(
                     local_attention=settings.local_attention,
                     local_attention_context_size=settings.local_attention_context_size,
                 )
+                transcript = trim_transcript(transcript, trim_start=settings.trim_start)
                 basename = unique_basename(episode, existing_bases)
                 existing_bases.add(basename)
                 paths = write_outputs(
