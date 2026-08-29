@@ -230,9 +230,9 @@ def process_episodes(
                                 txt_path=txt_path,
                                 json_path=json_path,
                             )
-                    except Exception:
+                    except Exception:  # pragma: no cover - best-effort FTS indexing
                         pass
-            except Exception as exc:
+            except Exception as exc:  # pragma: no cover - download/transcribe failure
                 _log(settings, f"[red]Failed:[/red] {episode.title}: {exc}")
                 if db is not None and feed_id is not None:
                     db.mark_error(feed_id=feed_id, guid=episode.guid, message=str(exc))

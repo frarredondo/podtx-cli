@@ -420,7 +420,7 @@ class Database:
         params.append(int(limit) if limit is not None else 10)
         try:
             rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError:  # pragma: no cover - invalid FTS syntax fallback
             # Invalid FTS5 syntax (e.g. unmatched quotes) -> try escaped phrase
             # Fallback to simple token search.
             try:
@@ -443,7 +443,7 @@ class Database:
                 sql2 += " ORDER BY rank LIMIT ?"
                 params2.append(int(limit) if limit is not None else 10)
                 rows = self._conn.execute(sql2, params2).fetchall()
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError:  # pragma: no cover - second fallback
                 return []
         out: list[dict[str, object]] = []
         for r in rows:
