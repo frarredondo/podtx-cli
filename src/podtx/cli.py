@@ -95,6 +95,30 @@ def _merge_formats(base: tuple[str, ...], extra: Optional[list[str]]) -> tuple[s
     return tuple(dict.fromkeys([*base, *requested]))
 
 
+def _human_size(num_bytes: int) -> str:
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    if num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    if num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.1f} MB"
+    return f"{num_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+
+def _transcript_disk_size(settings: Settings, slug: str) -> int:
+    root = settings.transcripts_dir(slug)
+    if not root.is_dir():
+        return 0
+    total = 0
+    for p in root.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 @app.callback()
 def main_callback(
     ctx: typer.Context,
@@ -150,19 +174,40 @@ def remove_feed(
 def list_feeds(
     data_dir: Optional[Path] = typer.Option(None, "--data-dir"),
 ) -> None:
-    """List registered feeds."""
+    """List registered feeds with episode counts, health and disk usage."""
     settings = load_settings(data_dir=data_dir)
     with _open_db(settings) as db:
         feeds = db.list_feeds()
-    if not feeds:
-        console.print("[dim]No feeds registered. Use `podtx add <rss-url>`.[/dim]")
-        return
-    table = Table(title="Registered feeds")
-    table.add_column("Slug")
-    table.add_column("Title")
-    table.add_column("URL")
+        if not feeds:
+            console.print("[dim]No feeds registered. Use `podtx add <rss-url>`.[/dim]")
+            return
+        health_by_id = {r["feed_id"]: r for r in db.feed_health_summary()}
+    table = Table(title="Registered feeds", show_lines=False)
+    table.add_column("Slug", no_wrap=True)
+    table.add_column("Title", overflow="fold")
+    table.add_column("URL", overflow="fold")
+    table.add_column("Episodes", no_wrap=True)
+    table.add_column("Health", justify="center", no_wrap=True)
+    table.add_column("Size", justify="right", no_wrap=True)
     for f in feeds:
-        table.add_row(f.slug, f.title, f.url)
+        h = health_by_id.get(
+            f.id,
+            {"total_episodes": 0, "done_count": 0, "pending_count": 0, "error_count": 0, "health_status": "empty"},
+        )
+        episodes_str = (
+            f"{h['done_count']} done / {h['pending_count']} pending / "
+            f"{h['error_count']} failed ({h['total_episodes']})"
+        )
+        size_bytes = _transcript_disk_size(settings, f.slug)
+        size_str = _human_size(size_bytes) if size_bytes else "-"
+        health = str(h["health_status"])
+        if health == "healthy":
+            health_disp = f"[green]{escape(health)}[/green]"
+        elif health == "empty":
+            health_disp = f"[dim]{escape(health)}[/dim]"
+        else:
+            health_disp = f"[yellow]{escape(health)}[/yellow]"
+        table.add_row(f.slug, f.title, f.url, episodes_str, health_disp, size_str)
     console.print(table)
 
 
@@ -171,7 +216,7 @@ def show_feed(
     feed: str = typer.Argument(..., help="Feed slug or URL"),
     data_dir: Optional[Path] = typer.Option(None, "--data-dir"),
 ) -> None:
-    """List known episodes and transcription status for a feed."""
+    """List known episodes and transcription status for a feed, with summary header."""
     settings = load_settings(data_dir=data_dir)
     with _open_db(settings) as db:
         f = db.get_feed(feed)
@@ -179,6 +224,34 @@ def show_feed(
             err_console.print(f"[red]Feed not found:[/red] {feed}")
             raise typer.Exit(1)
         rows = db.list_episodes(f.id)
+        # Summary header
+        summary = db.feed_health_summary()
+        # find this feed's summary
+        h = next((r for r in summary if r["feed_id"] == f.id), None)
+        if h:
+            size_bytes = _transcript_disk_size(settings, f.slug)
+            size_str = _human_size(size_bytes) if size_bytes else "-"
+            last = db.last_transcribed_at(f.id)
+            last_str = last[:10] if last else "-"
+            health = str(h["health_status"])
+            if health == "healthy":
+                health_disp = f"[green]{health}[/green]"
+            elif health == "empty":
+                health_disp = f"[dim]{health}[/dim]"
+            else:
+                health_disp = f"[yellow]{health}[/yellow]"
+            console.print(
+                f"[bold]{escape(f.title)}[/bold] ({escape(f.slug)}) — "
+                f"Episodes: {h['total_episodes']} · {h['done_count']} done · {h['pending_count']} pending · {h['error_count']} failed | "
+                f"Health: {health_disp} | Size: {size_str}"
+            )
+            console.print(f"Last transcribed: {escape(last_str)} | Last sync: {escape(last_str)}")
+            pending = int(h["pending_count"])
+            total = int(h["total_episodes"])
+            if pending > 0:
+                console.print(f"Pending queue: {pending} pending / {total} (showing {len(rows)} rows)")
+            if h["health_status"] == "empty":
+                console.print("[dim]No episodes recorded yet. (empty feed) — run `podtx sync`.[/dim]")
 
     table = Table(title=f"{f.title} ({f.slug})")
     table.add_column("Status")
@@ -193,7 +266,8 @@ def show_feed(
             row["title"],
         )
     if not rows:
-        console.print("[dim]No episodes recorded yet. Run `podtx sync`.[/dim]")
+        if h is None or h["health_status"] != "empty":
+            console.print("[dim]No episodes recorded yet. Run `podtx sync`.[/dim]")
     else:
         console.print(table)
 
