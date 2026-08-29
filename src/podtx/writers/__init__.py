@@ -4,6 +4,7 @@ from pathlib import Path
 
 from podtx.models import Episode, Transcript
 from podtx.writers import json as json_writer
+from podtx.writers import md as md_writer
 from podtx.writers import srt as srt_writer
 from podtx.writers import txt as txt_writer
 from podtx.writers import vtt as vtt_writer
@@ -13,6 +14,7 @@ _WRITERS = {
     "json": ("json", json_writer.write_json),
     "srt": ("srt", srt_writer.write_srt),
     "vtt": ("vtt", vtt_writer.write_vtt),
+    "md": ("md", md_writer.write_md),
 }
 
 
@@ -33,7 +35,7 @@ def write_outputs(
             raise ValueError(f"Unsupported format {fmt!r}. Choose from: {', '.join(_WRITERS)}")
         ext, writer = _WRITERS[key]
         path = out_dir / f"{basename}.{ext}"
-        if key in {"txt", "json"}:
+        if key in {"txt", "json", "md"}:
             paths.append(
                 writer(path, episode, transcript, readable=readable, cleanup=cleanup)
             )
