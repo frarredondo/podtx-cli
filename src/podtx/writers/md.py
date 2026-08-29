@@ -21,6 +21,7 @@ def write_md(
     readable: bool = False,
     cleanup: bool = False,
     correct_names: bool = False,
+    diarize: bool = False,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = body_text(
@@ -30,6 +31,7 @@ def write_md(
         cleanup=cleanup,
         correct_names=correct_names,
         episode=episode,
+        diarize=diarize,
     )
 
     lines: list[str] = ["---"]

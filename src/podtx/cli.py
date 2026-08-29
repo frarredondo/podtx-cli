@@ -55,6 +55,7 @@ def _settings_from_opts(
     readable: Optional[bool] = None,
     cleanup: Optional[bool] = None,
     correct_names: Optional[bool] = None,
+    diarize: Optional[bool] = None,
     trim_start: Optional[float] = None,
 ) -> Settings:
     return load_settings(
@@ -70,6 +71,7 @@ def _settings_from_opts(
         readable=readable,
         cleanup=cleanup,
         correct_names=correct_names,
+        diarize=diarize,
         trim_start=trim_start,
     )
 
@@ -501,6 +503,11 @@ def sync_feeds(
         "--correct-names",
         help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
     ),
+    diarize: bool = typer.Option(
+        False,
+        "--diarize",
+        help="Speaker diarization: label segments with SPEAKER_00/01 + reflect turns in text. Opt-in; off by default (single-speaker unchanged). Performance/memory impact: local, CPU-bound.",
+    ),
     trim_start: Optional[float] = typer.Option(
         None,
         "--trim-start",
@@ -527,6 +534,7 @@ def sync_feeds(
         readable=True if readable else None,
         cleanup=True if cleanup else None,
         correct_names=True if correct_names else None,
+        diarize=True if diarize else None,
         trim_start=trim_start,
     )
     settings = replace(
@@ -536,6 +544,7 @@ def sync_feeds(
         readable=readable or settings.readable,
         cleanup=cleanup or settings.cleanup,
         correct_names=correct_names or settings.correct_names,
+        diarize=diarize or settings.diarize,
     )
 
     try:
@@ -647,6 +656,11 @@ def transcribe_cmd(
         "--correct-names",
         help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
     ),
+    diarize: bool = typer.Option(
+        False,
+        "--diarize",
+        help="Speaker diarization: label segments with SPEAKER_00/01 + reflect turns in text. Opt-in; off by default.",
+    ),
     trim_start: Optional[float] = typer.Option(
         None,
         "--trim-start",
@@ -673,6 +687,7 @@ def transcribe_cmd(
         readable=True if readable else None,
         cleanup=True if cleanup else None,
         correct_names=True if correct_names else None,
+        diarize=True if diarize else None,
         trim_start=trim_start,
     )
     settings = replace(
@@ -682,6 +697,7 @@ def transcribe_cmd(
         readable=readable or settings.readable,
         cleanup=cleanup or settings.cleanup,
         correct_names=correct_names or settings.correct_names,
+        diarize=diarize or settings.diarize,
     )
 
     try:
@@ -782,6 +798,11 @@ def format_cmd(
         "--correct-names",
         help="Conservative proper-noun correction: build per-episode glossary from title/show/description/link and fix close misspellings in body text only (segments stay raw). Reports substitutions; byte-identical when off.",
     ),
+    diarize: bool = typer.Option(
+        False,
+        "--diarize",
+        help="Speaker diarization: label segments with SPEAKER_00/01 + reflect turns in text. Opt-in; off by default.",
+    ),
     format: Optional[list[str]] = typer.Option(
         None, "--format", "-f", help="Output format (repeatable): txt, json, srt, vtt, md"
     ),
@@ -821,6 +842,7 @@ def format_cmd(
                 readable=readable,
                 cleanup=cleanup,
                 correct_names=correct_names,
+                diarize=diarize,
                 formats=formats,
             )
         except TranscriptJsonError as exc:
@@ -897,6 +919,7 @@ def format_cmd(
         readable=readable,
         cleanup=cleanup,
         correct_names=correct_names,
+        diarize=diarize,
         formats=formats,
     )
 

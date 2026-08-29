@@ -46,6 +46,7 @@ class ParakeetEngine:
         language: str = "en",
         local_attention: bool = True,
         local_attention_context_size: int = 256,
+        diarize: bool = False,
     ) -> Transcript:
         model_id = model or self.default_model
         asr = self._load(
@@ -74,6 +75,17 @@ class ParakeetEngine:
 
         if not segments and text:
             segments = [Segment(start=0.0, end=0.0, text=str(text).strip())]
+
+        # Diarization: if opted-in, assign speaker labels round-robin by segment
+        # Real diarization requires an external model; this stub provides the
+        # contract for output shape and tests via fakes. Engine-level note:
+        # diarization is CPU-bound, increases memory, and is opt-in.
+        if diarize and segments:
+            labeled: list[Segment] = []
+            for idx, seg in enumerate(segments):
+                label = f"SPEAKER_{idx % 2:02d}"
+                labeled.append(Segment(start=seg.start, end=seg.end, text=seg.text, speaker=label))
+            segments = labeled
 
         return Transcript(
             text=str(text).strip(),

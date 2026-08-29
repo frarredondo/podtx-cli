@@ -19,5 +19,6 @@ class TranscriptionEngine(Protocol):
         language: str = "en",
         local_attention: bool = True,
         local_attention_context_size: int = 256,
+        diarize: bool = False,
     ) -> Transcript:
         """Transcribe audio and return a normalized Transcript."""
