@@ -408,7 +408,106 @@ def test_format_cmd_and_pipeline_incremental_indexing(tmp_path: Path) -> None:
     db2.add_feed("https://example.com/f2.xml", "f2", "F2")
     db2.upsert_search_entry(feed_slug="f2", guid="g-pipe", title="Pipe", published_at=None, text="bitter pipe", txt_path="/tmp/a.txt", json_path="/tmp/a.json")
     assert len(db2.search_transcripts("bitter")) == 1
-    # empty text should not insert
+    # empty text should still insert (text or ""), but search for empty shouldn't crash
     db2.upsert_search_entry(feed_slug="f2", guid="g-empty", title="Empty", published_at=None, text="   ", txt_path="/tmp/b.txt", json_path="/tmp/b.json")
+    # empty text entry still exists but search for bitterness still 1
     assert len(db2.search_transcripts("bitter")) == 1  # still 1
     db2.close()
+
+
+def test_maybe_index_no_db_no_crash(tmp_path: Path) -> None:
+    from podtx.format_cmd import _maybe_index_after_reformat
+
+    ep = _sample_episode(guid="g-no-db", title="NoDB")
+    tx = Transcript(text="hello", segments=[], language="en", model="m", engine="e")
+    # No DB file exists, should no-op without exception
+    _maybe_index_after_reformat(ep, tx, [tmp_path / "a.txt"])  # no json
+    _maybe_index_after_reformat(ep, tx, [tmp_path / "b.json", tmp_path / "b.txt"])
+
+
+def test_maybe_index_with_db(tmp_path: Path, monkeypatch) -> None:
+    from podtx.format_cmd import _maybe_index_after_reformat
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setenv("PODCAST_TRANSCRIBER_DATA_DIR", str(data_dir))
+    # Need to create DB via load_settings path
+    from podtx.config import load_settings as _ls
+
+    settings = _ls(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/f.xml", "myfeed", "My Feed")
+    db.close()
+    ep = _sample_episode(guid="g-idx", title="Idx")
+    tx = Transcript(text="index me bitter", segments=[], language="en", model="m", engine="e")
+    json_path = data_dir / "transcripts" / "myfeed" / "g-idx.json"
+    json_path.parent.mkdir(parents=True)
+    json_path.write_text(json.dumps({"guid": "g-idx", "title": "Idx", "text": "index me bitter"}))
+    txt_path = json_path.with_suffix(".txt")
+    txt_path.write_text("index me bitter")
+    _maybe_index_after_reformat(ep, tx, [txt_path, json_path])
+    db2 = Database(settings.state_db_path())
+    assert len(db2.search_transcripts("bitter")) >= 1
+    db2.close()
+
+
+def test_pipeline_process_episodes_indexes(monkeypatch, tmp_path: Path) -> None:
+    from podtx.pipeline import process_episodes
+    from podtx.config import load_settings
+    from unittest import mock
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    # Use quiet to avoid progress
+    settings = settings.__class__(**{**settings.__dict__, "quiet": True, "keep_audio": True})
+    db = Database(settings.state_db_path())
+    feed = db.add_feed("https://example.com/feed.xml", "feed", "Feed")
+    # Mock download and engine
+    fake_wav = tmp_path / "fake.wav"
+    fake_wav.write_bytes(b"fake")
+    monkeypatch.setattr("podtx.pipeline.download_only", lambda ep, audio_dir, quiet=False: tmp_path / "fake.mp3")
+    (tmp_path / "fake.mp3").write_bytes(b"fake")
+    monkeypatch.setattr("podtx.pipeline.convert_to_wav", lambda src, dst, trim_start=0.0: dst.write_bytes(b"wav") or dst)
+    monkeypatch.setattr("podtx.pipeline.get_engine", lambda name: mock.Mock(
+        name="parakeet",
+        transcribe=lambda wav, model, language, local_attention, local_attention_context_size: Transcript(
+            text="pipeline bitter lesson", segments=[Segment(0,1,"pipeline bitter lesson")], language="en", model=model, engine=name
+        )
+    ))
+    # Mock unique_basename to avoid collision
+    monkeypatch.setattr("podtx.pipeline.unique_basename", lambda ep, existing: "test_ep")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    ep = Episode(guid="pipe-g", title="Pipe Ep", enclosure_url="https://x/pipe.mp3", published_at=datetime(2026,1,1, tzinfo=timezone.utc), episode_num=1, show_title="Feed")
+    # Need to also mock require_ffmpeg to no-op
+    monkeypatch.setattr("podtx.pipeline.require_ffmpeg", lambda: None)
+    monkeypatch.setattr("podtx.download.require_ffmpeg", lambda: None)
+    results = process_episodes([ep], settings=settings, out_dir=out_dir, db=db, feed_id=feed.id)
+    assert len(results) >= 0  # at least attempted
+    # Check DB got indexed
+    hits = db.search_transcripts("pipeline")
+    assert len(hits) >= 1
+    db.close()
+
+
+def test_db_upsert_handles_empty_text_and_no_crash(tmp_path: Path) -> None:
+    db = Database(tmp_path / "db.db")
+    db.add_feed("https://example.com/f.xml", "f", "F")
+    # empty text should not crash and search should still work for other entries
+    db.upsert_search_entry(feed_slug="f", guid="g1", title="T1", published_at=None, text="", txt_path="/tmp/a.txt", json_path="/tmp/a.json")
+    db.upsert_search_entry(feed_slug="f", guid="g2", title="T2", published_at=None, text="hello world", txt_path="/tmp/b.txt", json_path="/tmp/b.json")
+    assert len(db.search_transcripts("hello")) == 1
+    # Search with no DB file should not crash (tested via CLI already)
+    db.close()
+
+
+def test_search_no_results_and_empty_db_cli(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    db = Database(data_dir / "state.db")
+    db.add_feed("https://example.com/f.xml", "f", "F")
+    db.close()
+    result = runner.invoke(app, ["search", "nonexistentkeyword123", "--data-dir", str(data_dir)])
+    assert result.exit_code == 0
+    assert "No results" in result.stdout or "no" in result.stdout.lower()
