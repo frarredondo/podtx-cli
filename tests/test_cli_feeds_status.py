@@ -179,3 +179,41 @@ def test_show_feed_not_found(tmp_path: Path) -> None:
     result = runner.invoke(app, ["show", "missing", "--data-dir", str(tmp_path)])
     assert result.exit_code != 0
     assert "not found" in (result.stdout + result.stderr).lower()
+
+
+def test_transcript_disk_size_handles_oserror(tmp_path: Path, monkeypatch) -> None:
+    from podtx.cli import _transcript_disk_size
+    from unittest import mock
+
+    settings = load_settings(data_dir=tmp_path)
+    tdir = settings.transcripts_dir("feed-a")
+    tdir.mkdir(parents=True)
+    (tdir / "a.txt").write_text("hello")
+
+    orig_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if self.name == "a.txt":
+            raise OSError("mocked")
+        return orig_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    size = _transcript_disk_size(settings, "feed-a")
+    assert isinstance(size, int)
+    assert size == 0
+
+    # also test with no error
+    monkeypatch.setattr(Path, "stat", orig_stat)
+    assert _transcript_disk_size(settings, "feed-a") == 5
+
+
+def test_show_with_no_health_summary(monkeypatch, tmp_path: Path) -> None:
+    settings = load_settings(data_dir=tmp_path)
+    db = Database(settings.state_db_path())
+    feed = db.add_feed("https://example.com/monkey.xml", "monkey-feed", "Monkey Feed")
+    db.upsert_episode(feed_id=feed.id, guid="m1", title="M1", published_at=None, episode_num=1, enclosure_url="https://x/m1.mp3")
+    db.close()
+    monkeypatch.setattr(Database, "feed_health_summary", lambda self: [])
+    result = runner.invoke(app, ["show", "monkey-feed", "--data-dir", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "M1" in result.stdout

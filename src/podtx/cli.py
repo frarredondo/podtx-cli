@@ -111,11 +111,11 @@ def _transcript_disk_size(settings: Settings, slug: str) -> int:
         return 0
     total = 0
     for p in root.rglob("*"):
-        if p.is_file():
-            try:
+        try:
+            if p.is_file():
                 total += p.stat().st_size
-            except OSError:
-                continue
+        except OSError:
+            continue
     return total
 
 
