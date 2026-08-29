@@ -246,6 +246,34 @@ class Database:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
+    # ─── Health-check queries behind `podtx doctor` / `podtx feeds` ─────────
+
+    def failed_guids(self, feed_id: int) -> set[str]:
+        """Return GUIDs of episodes whose status is 'error' for this feed."""
+        rows = self._conn.execute(
+            "SELECT guid FROM episodes WHERE feed_id = ? AND status = 'error'",
+            (feed_id,),
+        ).fetchall()
+        return {r["guid"] for r in rows}
+
+    def pending_guids(self, feed_id: int) -> set[str]:
+        """Return GUIDs of episodes whose status is 'pending' for this feed."""
+        rows = self._conn.execute(
+            "SELECT guid FROM episodes WHERE feed_id = ? AND status = 'pending'",
+            (feed_id,),
+        ).fetchall()
+        return {r["guid"] for r in rows}
+
+    def last_transcribed_at(self, feed_id: int) -> str | None:
+        """Return the most recent transcribed_at timestamp for a feed, if any."""
+        row = self._conn.execute(
+            "SELECT MAX(transcribed_at) AS m FROM episodes WHERE feed_id = ? AND status = 'done'",
+            (feed_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return row["m"] if row["m"] else None
+
     # ─── Health-check queries behind `podtx doctor` ────────────────────────
 
     def empty_feeds(self) -> list[dict[str, object]]:
