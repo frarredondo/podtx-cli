@@ -98,18 +98,28 @@ def _maybe_index_after_reformat(
     episode: Episode,
     transcript: Transcript,
     written: list[Path],
+    *,
+    config_data_dir: Path | None = None,
 ) -> None:
     """Best-effort incremental FTS indexing after a reformat.
 
     Uses the default library location; callers with a custom --data-dir
-    should index via the DB they already hold (see cli.py).
+    should index via the DB they already hold (see cli.py) or pass
+    ``config_data_dir`` for direct seam testing.
     Silently no-ops if no library exists or indexing fails.
     """
     try:
-        from podtx.config import load_settings
+        if config_data_dir is not None:
+            from podtx.config import load_settings as _ls
+
+            settings = _ls(data_dir=config_data_dir)
+        else:
+            from podtx.config import load_settings
+
+            settings = load_settings()
         from podtx.db import Database
 
-        settings = load_settings()
+        settings = settings
         db_path = settings.state_db_path()
         if not db_path.exists():
             return

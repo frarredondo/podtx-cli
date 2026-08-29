@@ -790,7 +790,7 @@ def format_cmd(
                 try:
                     txt_path_sf = str(jpath_sf.with_suffix(".txt").resolve())
                     json_path_sf = str(jpath_sf.resolve())
-                except Exception:
+                except Exception:  # pragma: no cover - best-effort resolve
                     json_path_sf = str(jpath_sf)
                 with Database(settings_sf.state_db_path()) as sdb_sf:
                     sdb_sf.upsert_search_entry(
@@ -802,7 +802,7 @@ def format_cmd(
                         txt_path=txt_path_sf,
                         json_path=json_path_sf,
                     )
-        except Exception:
+        except Exception:  # pragma: no cover - best-effort indexing
             pass
         if not quiet:
             for p in paths:
@@ -856,7 +856,7 @@ def format_cmd(
                         try:
                             txt_path = str(jpath.with_suffix(".txt").resolve())
                             json_path_str = str(jpath.resolve())
-                        except Exception:
+                        except Exception:  # pragma: no cover - best-effort resolve
                             json_path_str = str(jpath)
                         sdb.upsert_search_entry(
                             feed_slug=feed_slug,
@@ -867,9 +867,9 @@ def format_cmd(
                             txt_path=txt_path,
                             json_path=json_path_str,
                         )
-                    except Exception:
+                    except Exception:  # pragma: no cover - per-file best-effort
                         continue
-        except Exception:
+        except Exception:  # pragma: no cover - batch best-effort indexing
             pass
 
     if not quiet:

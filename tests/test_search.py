@@ -420,18 +420,19 @@ def test_maybe_index_no_db_no_crash(tmp_path: Path) -> None:
 
     ep = _sample_episode(guid="g-no-db", title="NoDB")
     tx = Transcript(text="hello", segments=[], language="en", model="m", engine="e")
-    # No DB file exists, should no-op without exception
+    # No DB file exists, should no-op without exception via explicit data_dir seam (fake)
+    _maybe_index_after_reformat(ep, tx, [tmp_path / "a.txt"], config_data_dir=tmp_path)
+    _maybe_index_after_reformat(ep, tx, [tmp_path / "b.json", tmp_path / "b.txt"], config_data_dir=tmp_path)
+    # also via env/default path (no data_dir)
     _maybe_index_after_reformat(ep, tx, [tmp_path / "a.txt"])  # no json
     _maybe_index_after_reformat(ep, tx, [tmp_path / "b.json", tmp_path / "b.txt"])
 
 
-def test_maybe_index_with_db(tmp_path: Path, monkeypatch) -> None:
+def test_maybe_index_with_db(tmp_path: Path) -> None:
     from podtx.format_cmd import _maybe_index_after_reformat
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    monkeypatch.setenv("PODCAST_TRANSCRIBER_DATA_DIR", str(data_dir))
-    # Need to create DB via load_settings path
     from podtx.config import load_settings as _ls
 
     settings = _ls(data_dir=data_dir)
@@ -445,7 +446,8 @@ def test_maybe_index_with_db(tmp_path: Path, monkeypatch) -> None:
     json_path.write_text(json.dumps({"guid": "g-idx", "title": "Idx", "text": "index me bitter"}))
     txt_path = json_path.with_suffix(".txt")
     txt_path.write_text("index me bitter")
-    _maybe_index_after_reformat(ep, tx, [txt_path, json_path])
+    # Use seam: config_data_dir fake instead of env/monkeypatch
+    _maybe_index_after_reformat(ep, tx, [txt_path, json_path], config_data_dir=data_dir)
     db2 = Database(settings.state_db_path())
     assert len(db2.search_transcripts("bitter")) >= 1
     db2.close()

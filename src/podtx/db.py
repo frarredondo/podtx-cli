@@ -490,7 +490,7 @@ class Database:
             try:
                 txt_p = str(json_path.with_suffix(".txt").resolve())
                 json_p = str(json_path.resolve())
-            except Exception:
+            except Exception:  # pragma: no cover - best-effort resolve
                 txt_p = txt_path
                 json_p = str(json_path)
             self.upsert_search_entry(
