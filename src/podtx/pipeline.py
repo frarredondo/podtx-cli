@@ -215,6 +215,23 @@ def process_episodes(
                         model=transcript.model,
                         output_paths=paths,
                     )
+                    # Incremental FTS indexing (offline search)
+                    try:
+                        feed = db.get_feed_by_id(feed_id)
+                        if feed is not None:
+                            txt_path = next((str(p) for p in paths if p.suffix == ".txt"), str(paths[0]) if paths else "")
+                            json_path = next((str(p) for p in paths if p.suffix == ".json"), str(paths[0]) if paths else "")
+                            db.upsert_search_entry(
+                                feed_slug=feed.slug,
+                                guid=episode.guid,
+                                title=episode.title,
+                                published_at=episode.published_at.isoformat() if episode.published_at else None,
+                                text=transcript.text,
+                                txt_path=txt_path,
+                                json_path=json_path,
+                            )
+                    except Exception:
+                        pass
             except Exception as exc:
                 _log(settings, f"[red]Failed:[/red] {episode.title}: {exc}")
                 if db is not None and feed_id is not None:

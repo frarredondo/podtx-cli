@@ -94,6 +94,57 @@ def discover_transcript_jsons(
     return sorted(root.glob("*/*.json"))
 
 
+def _maybe_index_after_reformat(
+    episode: Episode,
+    transcript: Transcript,
+    written: list[Path],
+) -> None:
+    """Best-effort incremental FTS indexing after a reformat.
+
+    Uses the default library location; callers with a custom --data-dir
+    should index via the DB they already hold (see cli.py).
+    Silently no-ops if no library exists or indexing fails.
+    """
+    try:
+        from podtx.config import load_settings
+        from podtx.db import Database
+
+        settings = load_settings()
+        db_path = settings.state_db_path()
+        if not db_path.exists():
+            return
+        # Determine feed_slug / paths from written outputs
+        json_path = next((p for p in written if p.suffix == ".json"), None)
+        if json_path is None:
+            return
+        feed_slug = json_path.parent.name
+        txt_path = next((str(p) for p in written if p.suffix == ".txt"), str(json_path))
+        json_path_str = str(json_path)
+        try:
+            # Prefer absolute paths for stable CLI output
+            txt_candidates = [p for p in written if p.suffix == ".txt"]
+            if txt_candidates:
+                txt_path = str(txt_candidates[0].resolve())
+            json_path_str = str(json_path.resolve())
+        except Exception:
+            pass
+        db = Database(db_path)
+        try:
+            db.upsert_search_entry(
+                feed_slug=feed_slug,
+                guid=episode.guid,
+                title=episode.title,
+                published_at=episode.published_at.isoformat() if episode.published_at else None,
+                text=transcript.text,
+                txt_path=txt_path,
+                json_path=json_path_str,
+            )
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+
 def reformat_transcript(
     json_path: Path,
     *,
@@ -107,7 +158,7 @@ def reformat_transcript(
     dest = out_dir or json_path.parent
     dest.mkdir(parents=True, exist_ok=True)
     basename = json_path.stem
-    return write_outputs(
+    written = write_outputs(
         out_dir=dest,
         basename=basename,
         episode=episode,
@@ -116,6 +167,8 @@ def reformat_transcript(
         readable=readable,
         cleanup=cleanup,
     )
+    _maybe_index_after_reformat(episode, transcript, written)
+    return written
 
 
 def reformat_many(

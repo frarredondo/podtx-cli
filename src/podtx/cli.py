@@ -772,6 +772,38 @@ def format_cmd(
         except TranscriptJsonError as exc:
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
+        # Single-file incremental indexing (best-effort)
+        try:
+            settings_sf = load_settings(data_dir=data_dir)
+            jpath_sf = next((p for p in paths if p.suffix == ".json"), None)
+            if jpath_sf and settings_sf.state_db_path().exists():
+                # If custom data_dir, check file is under transcripts or just index anyway
+                payload_sf = json.loads(jpath_sf.read_text(encoding="utf-8"))
+                feed_slug_sf = jpath_sf.parent.name
+                guid_sf = str(payload_sf.get("guid") or jpath_sf.stem)
+                title_sf = str(payload_sf.get("title") or jpath_sf.stem)
+                published_at_sf = str(payload_sf.get("date")) if payload_sf.get("date") else None
+                text_sf = str(payload_sf.get("text") or "")
+                if not text_sf and payload_sf.get("segments"):
+                    text_sf = " ".join(str(s.get("text","")) for s in payload_sf.get("segments") or [] if s.get("text"))
+                txt_path_sf = str(jpath_sf.with_suffix(".txt"))
+                try:
+                    txt_path_sf = str(jpath_sf.with_suffix(".txt").resolve())
+                    json_path_sf = str(jpath_sf.resolve())
+                except Exception:
+                    json_path_sf = str(jpath_sf)
+                with Database(settings_sf.state_db_path()) as sdb_sf:
+                    sdb_sf.upsert_search_entry(
+                        feed_slug=feed_slug_sf,
+                        guid=guid_sf,
+                        title=title_sf,
+                        published_at=published_at_sf,
+                        text=text_sf,
+                        txt_path=txt_path_sf,
+                        json_path=json_path_sf,
+                    )
+        except Exception:
+            pass
         if not quiet:
             for p in paths:
                 console.print(f"[green]Wrote[/green] {p}")
@@ -804,6 +836,42 @@ def format_cmd(
         formats=formats,
     )
 
+    # Incremental FTS indexing for batch reformats
+    if result.ok:
+        try:
+            with Database(settings.state_db_path()) as sdb:
+                json_written = [p for p in result.written if p.suffix == ".json"]
+                # When out_dir is custom, index written files; otherwise targets are overwritten in-place
+                for jpath in json_written:
+                    try:
+                        feed_slug = jpath.parent.name
+                        payload = json.loads(jpath.read_text(encoding="utf-8"))
+                        guid = str(payload.get("guid") or jpath.stem)
+                        title = str(payload.get("title") or jpath.stem)
+                        published_at = str(payload.get("date")) if payload.get("date") else None
+                        text = str(payload.get("text") or "")
+                        if not text and payload.get("segments"):
+                            text = " ".join(str(s.get("text", "")) for s in payload.get("segments") or [] if s.get("text"))
+                        txt_path = str(jpath.with_suffix(".txt"))
+                        try:
+                            txt_path = str(jpath.with_suffix(".txt").resolve())
+                            json_path_str = str(jpath.resolve())
+                        except Exception:
+                            json_path_str = str(jpath)
+                        sdb.upsert_search_entry(
+                            feed_slug=feed_slug,
+                            guid=guid,
+                            title=title,
+                            published_at=published_at,
+                            text=text,
+                            txt_path=txt_path,
+                            json_path=json_path_str,
+                        )
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     if not quiet:
         for p in result.written:
             console.print(f"[green]Wrote[/green] {p}")
@@ -815,6 +883,58 @@ def format_cmd(
 
     if result.failed:
         raise typer.Exit(1)
+
+
+@app.command("search")
+def search_cmd(
+    query: Optional[str] = typer.Argument(None, help="Search query (FTS5)"),
+    feed: Optional[str] = typer.Option(None, "--feed", help="Filter by feed slug"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Max results"),
+    since: Optional[str] = typer.Option(None, "--since", help="Earliest date (ISO YYYY-MM-DD)"),
+    until: Optional[str] = typer.Option(None, "--until", help="Latest date (ISO YYYY-MM-DD)"),
+    reindex: bool = typer.Option(False, "--reindex", help="Rebuild search index from transcripts"),
+    data_dir: Optional[Path] = typer.Option(None, "--data-dir", help="Override data directory"),
+) -> None:
+    """Search indexed transcripts (offline FTS5)."""
+    settings = load_settings(data_dir=data_dir)
+    db_path = settings.state_db_path()
+    if reindex:
+        ensure_data_dirs(settings)
+        with Database(db_path) as db:
+            count = db.reindex_search(settings.transcripts_dir())
+        console.print(f"Reindexed {count} transcript(s)")
+        if not query:
+            return
+    if not query:
+        err_console.print("[red]Provide a search query or use --reindex[/red]")
+        raise typer.Exit(1)
+    if not db_path.exists():
+        console.print("[dim]No results[/dim]")
+        return
+    with Database(db_path) as db:
+        hits = db.search_transcripts(query, feed=feed, limit=limit, since=since, until=until)
+    if not hits:
+        console.print("[dim]No results[/dim]")
+        return
+    for h in hits:
+        title = str(h.get("title") or "")
+        feed_slug = str(h.get("feed_slug") or "")
+        published_at = str(h.get("published_at") or "")
+        date_str = published_at[:10] if published_at else ""
+        snippet = str(h.get("snippet") or h.get("text") or "")[:400]
+        txt_path = str(h.get("txt_path") or "")
+        json_path = str(h.get("json_path") or "")
+        header = f"[bold]{escape(title)}[/bold] [dim]({escape(feed_slug)})[/dim]"
+        if date_str:
+            header += f" [dim]{escape(date_str)}[/dim]"
+        console.print(header)
+        if snippet:
+            console.print(escape(snippet))
+        if txt_path:
+            console.print(escape(txt_path))
+        if json_path:
+            console.print(escape(json_path))
+        console.print("[dim]---[/dim]")
 
 
 @app.command("rename")

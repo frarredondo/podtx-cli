@@ -61,6 +61,16 @@ class Database:
                 transcribed_at TEXT,
                 UNIQUE(feed_id, guid)
             );
+            CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+                feed_slug,
+                guid UNINDEXED,
+                title,
+                text,
+                published_at UNINDEXED,
+                txt_path UNINDEXED,
+                json_path UNINDEXED,
+                tokenize='porter'
+            );
             """
         )
         self._conn.commit()
@@ -348,3 +358,149 @@ class Database:
                 "health_status": health,
             })
         return result
+
+    # ─── Search (FTS5) ─────────────────────────────────────────────────
+
+    def upsert_search_entry(
+        self,
+        *,
+        feed_slug: str,
+        guid: str,
+        title: str,
+        published_at: str | None,
+        text: str,
+        txt_path: str,
+        json_path: str,
+    ) -> None:
+        """Insert or replace a transcript in the FTS index."""
+        # FTS5 has no REPLACE; delete then insert.
+        self._conn.execute(
+            "DELETE FROM search_fts WHERE guid = ? AND feed_slug = ?",
+            (guid, feed_slug),
+        )
+        self._conn.execute(
+            "INSERT INTO search_fts (feed_slug, guid, title, text, published_at, txt_path, json_path) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (feed_slug, guid, title, text or "", published_at, txt_path, json_path),
+        )
+        self._conn.commit()
+
+    def search_transcripts(
+        self,
+        query: str,
+        feed: str | None = None,
+        limit: int | None = 10,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Full-text search over indexed transcripts.
+
+        Returns dicts with feed_slug, guid, title, published_at, text,
+        txt_path, json_path, snippet, rank.
+        """
+        if not query or not query.strip():
+            return []
+        q = query.strip()
+        # Build query: FTS5 MATCH + optional filters.
+        sql = (
+            "SELECT feed_slug, guid, title, published_at, text, txt_path, json_path, "
+            "snippet(search_fts, 3, '', '', ' … ', 24) AS snippet, rank "
+            "FROM search_fts WHERE search_fts MATCH ?"
+        )
+        params: list[object] = [q]
+        if feed:
+            sql += " AND feed_slug = ?"
+            params.append(feed)
+        if since:
+            sql += " AND published_at IS NOT NULL AND published_at >= ?"
+            params.append(since)
+        if until:
+            sql += " AND published_at IS NOT NULL AND published_at <= ?"
+            params.append(until)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(int(limit) if limit is not None else 10)
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            # Invalid FTS5 syntax (e.g. unmatched quotes) -> try escaped phrase
+            # Fallback to simple token search.
+            try:
+                safe = '"' + q.replace('"', '""') + '"'
+                params2: list[object] = [safe]
+                sql2 = (
+                    "SELECT feed_slug, guid, title, published_at, text, txt_path, json_path, "
+                    "snippet(search_fts, 3, '', '', ' … ', 24) AS snippet, rank "
+                    "FROM search_fts WHERE search_fts MATCH ?"
+                )
+                if feed:
+                    sql2 += " AND feed_slug = ?"
+                    params2.append(feed)
+                if since:
+                    sql2 += " AND published_at IS NOT NULL AND published_at >= ?"
+                    params2.append(since)
+                if until:
+                    sql2 += " AND published_at IS NOT NULL AND published_at <= ?"
+                    params2.append(until)
+                sql2 += " ORDER BY rank LIMIT ?"
+                params2.append(int(limit) if limit is not None else 10)
+                rows = self._conn.execute(sql2, params2).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        out: list[dict[str, object]] = []
+        for r in rows:
+            out.append({
+                "feed_slug": r["feed_slug"],
+                "guid": r["guid"],
+                "title": r["title"],
+                "published_at": r["published_at"],
+                "text": r["text"],
+                "txt_path": r["txt_path"],
+                "json_path": r["json_path"],
+                "snippet": r["snippet"] if r["snippet"] else (r["text"][:160] if r["text"] else ""),
+                "rank": r["rank"],
+            })
+        return out
+
+    def reindex_search(self, transcripts_root: Path) -> int:
+        """Rebuild FTS index from transcript JSON files on disk."""
+        root = Path(transcripts_root).expanduser()
+        if not root.is_dir():
+            return 0
+        count = 0
+        for json_path in sorted(root.rglob("*.json")):
+            try:
+                payload = json.loads(json_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            feed_slug = json_path.parent.name
+            guid = str(payload.get("guid") or json_path.stem)
+            title = str(payload.get("title") or json_path.stem)
+            published_at = payload.get("date")
+            if published_at is not None:
+                published_at = str(published_at)
+            text = str(payload.get("text") or "").strip()
+            if not text and payload.get("segments"):
+                try:
+                    text = " ".join(str(s.get("text", "")).strip() for s in payload.get("segments") or [] if s.get("text"))
+                except Exception:
+                    text = ""
+            txt_path = str(json_path.with_suffix(".txt"))
+            # Prefer absolute paths for CLI output stability
+            try:
+                txt_p = str(json_path.with_suffix(".txt").resolve())
+                json_p = str(json_path.resolve())
+            except Exception:
+                txt_p = txt_path
+                json_p = str(json_path)
+            self.upsert_search_entry(
+                feed_slug=feed_slug,
+                guid=guid,
+                title=title,
+                published_at=published_at,
+                text=text,
+                txt_path=txt_p,
+                json_path=json_p,
+            )
+            count += 1
+        return count
