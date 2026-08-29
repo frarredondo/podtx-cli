@@ -161,6 +161,7 @@ def reformat_transcript(
     out_dir: Path | None = None,
     readable: bool = False,
     cleanup: bool = False,
+    correct_names: bool = False,
     formats: tuple[str, ...] = ("txt", "json"),
 ) -> list[Path]:
     """Re-write outputs from an existing transcript JSON without re-running ASR."""
@@ -176,6 +177,7 @@ def reformat_transcript(
         formats=formats,
         readable=readable,
         cleanup=cleanup,
+        correct_names=correct_names,
     )
     _maybe_index_after_reformat(episode, transcript, written)
     return written
@@ -187,6 +189,7 @@ def reformat_many(
     out_dir: Path | None = None,
     readable: bool = False,
     cleanup: bool = False,
+    correct_names: bool = False,
     formats: tuple[str, ...] = ("txt", "json"),
 ) -> BatchFormatResult:
     """Reformat many transcript JSON files; continue on per-file errors."""
@@ -198,6 +201,7 @@ def reformat_many(
                 out_dir=out_dir,
                 readable=readable,
                 cleanup=cleanup,
+                correct_names=correct_names,
                 formats=formats,
             )
         except (TranscriptJsonError, OSError, ValueError) as exc:

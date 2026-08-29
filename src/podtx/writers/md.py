@@ -20,6 +20,7 @@ def write_md(
     *,
     readable: bool = False,
     cleanup: bool = False,
+    correct_names: bool = False,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = body_text(
@@ -27,6 +28,8 @@ def write_md(
         transcript.segments,
         readable=readable,
         cleanup=cleanup,
+        correct_names=correct_names,
+        episode=episode,
     )
 
     lines: list[str] = ["---"]

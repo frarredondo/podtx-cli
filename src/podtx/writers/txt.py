@@ -27,6 +27,7 @@ def write_txt(
     *,
     readable: bool = False,
     cleanup: bool = False,
+    correct_names: bool = False,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     header = "\n".join(_header_lines(episode, transcript))
@@ -35,6 +36,8 @@ def write_txt(
         transcript.segments,
         readable=readable,
         cleanup=cleanup,
+        correct_names=correct_names,
+        episode=episode,
     )
     content = f"{header}\n\n{body}\n"
     path.write_text(content, encoding="utf-8")
