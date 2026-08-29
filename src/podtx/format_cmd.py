@@ -152,7 +152,7 @@ def _maybe_index_after_reformat(
         finally:
             db.close()
     except Exception:  # pragma: no cover - best-effort indexing
-        pass
+        pass  # pragma: no cover
 
 
 def reformat_transcript(
