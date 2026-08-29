@@ -390,7 +390,7 @@ def sync_feeds(
     all_episodes: bool = typer.Option(False, "--all", help="Process all pending episodes"),
     keep_audio: bool = typer.Option(False, "--keep-audio", help="Retain downloaded audio"),
     format: Optional[list[str]] = typer.Option(
-        None, "--format", "-f", help="Output format (repeatable): txt, json, srt, vtt"
+        None, "--format", "-f", help="Output format (repeatable): txt, json, srt, vtt, md"
     ),
     out_dir: Optional[Path] = typer.Option(None, "--out-dir", help="Override output directory"),
     data_dir: Optional[Path] = typer.Option(None, "--data-dir"),
@@ -518,7 +518,7 @@ def transcribe_cmd(
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="For RSS: max episodes"),
     all_episodes: bool = typer.Option(False, "--all", help="For RSS: all episodes"),
     keep_audio: bool = typer.Option(False, "--keep-audio"),
-    format: Optional[list[str]] = typer.Option(None, "--format", "-f"),
+    format: Optional[list[str]] = typer.Option(None, "--format", "-f", help="Output format (repeatable): txt, json, srt, vtt, md"),
     out_dir: Optional[Path] = typer.Option(None, "--out-dir", help="Default: current directory"),
     data_dir: Optional[Path] = typer.Option(None, "--data-dir"),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
@@ -659,7 +659,7 @@ def format_cmd(
         help="Strip fillers (uh/um) and collapse consecutive word doubles",
     ),
     format: Optional[list[str]] = typer.Option(
-        None, "--format", "-f", help="Output format (repeatable): txt, json, srt, vtt"
+        None, "--format", "-f", help="Output format (repeatable): txt, json, srt, vtt, md"
     ),
     out_dir: Optional[Path] = typer.Option(
         None, "--out-dir", help="Output directory (default: same as JSON)"
