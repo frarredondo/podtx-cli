@@ -23,8 +23,10 @@ DEFAULT_SUMMARIZE_BACKEND = "fake"
 DEFAULT_OPENROUTER_MODEL = "meta/muse-spark-1.2-contributor"
 DEFAULT_OPENCODE_MODEL = "muse-spark-1.2-contributor"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_OPENCODE_BASE_URL = "https://api.meta.ai/v1"
+DEFAULT_OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 DEFAULT_LMSTUDIO_BASE_URL = "http://localhost:1234/v1"
+# Direct Meta API (for Muse Spark without Go)
+DEFAULT_META_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_SUMMARIZE_TIMEOUT = 60.0
 DEFAULT_SUMMARIZE_TEMPERATURE = 0.3
 
@@ -255,6 +257,8 @@ def load_settings(
     if (v := os.environ.get("OPENROUTER_API_KEY")) is not None:  # not prefixed
         settings = replace(settings, summarize_api_key=v)
     if (v := os.environ.get("OPENCODE_API_KEY")) is not None:
+        settings = replace(settings, summarize_api_key=v)
+    if (v := os.environ.get("MODEL_API_KEY")) is not None:
         settings = replace(settings, summarize_api_key=v)
     if (v := os.environ.get("LMSTUDIO_BASE_URL")) is not None:
         settings = replace(settings, summarize_base_url=v)

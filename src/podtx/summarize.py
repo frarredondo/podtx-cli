@@ -225,12 +225,17 @@ def _call_openai_compatible(
     except httpx.RequestError as exc:
         raise SummarizeError(f"LLM request failed: {exc}") from exc
     if resp.status_code != 200:
-        # Try to include error body
         try:
             err_body = resp.text[:500]
         except Exception:  # pragma: no cover
             err_body = ""  # pragma: no cover
-        raise SummarizeError(f"LLM request failed ({resp.status_code}): {err_body}")
+        # Hint for opencode Go vs direct Meta API mixup
+        hint = ""
+        if resp.status_code == 401 and "opencode.ai/zen/go" in base_url:
+            hint = " (Go key invalid? check opencode.ai/zen/go dashboard, or try --base-url https://api.meta.ai/v1 for direct Meta API)"
+        elif resp.status_code == 401 and "api.meta.ai" in base_url:
+            hint = " (Meta API key invalid? check https://api.meta.ai console, or try --base-url https://opencode.ai/zen/go/v1 for Go subscription)"
+        raise SummarizeError(f"LLM request failed ({resp.status_code}): {err_body}{hint}")
     try:
         data = resp.json()
     except Exception as exc:
