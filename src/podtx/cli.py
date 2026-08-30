@@ -1141,6 +1141,27 @@ def auth_set(
             err_console.print("[red]No key provided[/red]")
             raise typer.Exit(1)
         secret = secret.strip()
+    # Sanitize bracketed-paste artifacts (ESC[200~ / ESC[201~ etc. can leak as " [O [I" when hide_input=True)
+    def _sanitize_key(raw: str) -> str:
+        s = raw.strip()
+        # strip surrounding quotes if pasted with them
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'", "`"):
+            s = s[1:-1].strip()
+        # common bracketed-paste / escape fragments that leak with hide_input
+        for seq in ("\x1b[200~", "\x1b[201~", "[200~", "[201~", "\x1b[O", "\x1b[I", "[O", "[I"):
+            s = s.replace(seq, "")
+        s = s.replace("\x1b", "").replace("\r", "").replace("\n", "")
+        # leading garbage like " [" from broken paste
+        s = s.lstrip(" [")
+        return s.strip()
+    sanitized = _sanitize_key(secret)
+    if sanitized != secret:
+        # warn but use sanitized version (common when pasting long keys with hide_input)
+        console.print(f"[dim]Sanitized pasted key ({len(secret)} → {len(sanitized)} chars) — bracketed-paste artifacts removed[/dim]")
+        secret = sanitized
+    if not secret:
+        err_console.print(f"[red]No key after sanitizing — try `podtx auth set {b} --api-key <key>` to avoid paste issues[/red]")
+        raise typer.Exit(1)
     from podtx.keychain import save_api_key as _save
 
     try:
