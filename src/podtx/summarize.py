@@ -82,9 +82,7 @@ def _overview_from_sentences(sentences: list[str], text: str) -> str:
 def _truncate_text(text: str, max_chars: int | None) -> tuple[str, bool]:
     if max_chars is None or len(text) <= max_chars:
         return text, False
-    # Try sentence boundary
     cut = text[:max_chars]
-    # Find last sentence end
     last_dot = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
     if last_dot > max_chars * 0.5:
         return cut[: last_dot + 1].strip(), True
@@ -102,7 +100,6 @@ def _resolve_api_key(
         return api_key
     if settings_api_key:
         return settings_api_key
-    # Try keychain if service/account provided
     if service and account:
         try:
             from podtx.keychain import get_api_key
@@ -112,7 +109,6 @@ def _resolve_api_key(
                 return val
         except Exception:  # pragma: no cover - best effort
             pass  # pragma: no cover
-    # Provider-specific service defaults
     b = _normalize_backend(backend)
     defaults: dict[str, tuple[str, str]] = {
         "openrouter": ("podtx-openrouter", "api-key"),
@@ -120,7 +116,6 @@ def _resolve_api_key(
     }
     if b in defaults:
         svc, acct = defaults[b]
-        # Only try if no explicit service/account to avoid duplicate
         if not (service and account):
             try:
                 from podtx.keychain import get_api_key as _g
@@ -133,27 +128,51 @@ def _resolve_api_key(
     return None
 
 
-def _build_prompt(episode: Episode, transcript_text: str) -> list[dict[str, str]]:
+def _duration_minutes(transcript: Transcript) -> float:
+    if transcript.segments:
+        try:
+            return float(transcript.segments[-1].end) / 60.0
+        except Exception:
+            pass
+    # fallback via word count ~150 wpm
+    words = len(transcript.text.split())
+    return words / 150.0
+
+
+def _nugget_target_for_duration(minutes: float) -> str:
+    if minutes < 20:
+        return "1-3 nuggets (short ~10-15min episode)"
+    if minutes > 60:
+        return "3-7 nuggets (long 60+ min episode)"
+    return "3-5 nuggets (standard episode)"
+
+
+def _build_prompt(episode: Episode, transcript_text: str, basename: str, minutes: float) -> list[dict[str, str]]:
     title = episode.title or "Untitled"
     show = episode.show_title or ""
+    target = _nugget_target_for_duration(minutes)
     header = f"Podcast: {show} — Episode: {title}" if show else f"Episode: {title}"
+    # include guest hint from title/show, and filename for context field
+    context_hint = f"{show} — {basename}" if show else basename
     system = (
-        "You are a podcast summarizer. Given a transcript, return strict JSON "
-        "with keys: overview (2-3 sentence summary), key_points (array of 3-5 concise bullet strings), "
-        "quotes (array of 0-3 objects with 'text' exact verbatim substring from transcript and optional 'start' seconds). "
-        "Do not invent timestamps. Keep quotes short."
+        f"You are extracting durable insights for software engineers from podcast transcripts. Extract {target} using criteria: "
+        "memorable quote, counterintuitive insight, hard-won lesson, mental model, or principle valuable to a software engineer / technical audience. "
+        "Each nugget is JSON with: insight (1-2 sentences, punchy, self-contained), context (guest + episode filename, e.g. \""
+        + context_hint
+        + "\"), why_it_matters (1 sentence, why a software engineer should care), quote (short verbatim quote <30 words from transcript if present, else \"\" — exact substring, don't invent, <30 words). "
+        "Focus on timeless wisdom, not ephemeral news or self-promo. Prioritize most surprising / actionable. "
+        "Also return top5_best: array of up to 5 indices (0-based) of the best nuggets ranked most valuable first (\"Best of Show\"). "
+        "Read the full transcript, don't hallucinate. Return strict JSON: {\"nuggets\": [ {insight, context, why_it_matters, quote} ], \"top5_best\": [indices] }"
     )
-    user = f"{header}\n\nTranscript:\n{transcript_text}"
+    user = f"{header}\nEpisode file: {basename}\nDuration: {minutes:.1f} min\n\nTranscript:\n{transcript_text}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def _extract_json_content(raw: str) -> dict:
-    # Try direct JSON
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
-    # Try to find first {...} block
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -167,37 +186,77 @@ def _extract_json_content(raw: str) -> dict:
 def _validate_llm_payload(payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise SummarizeError("LLM payload must be a JSON object")
-    overview = payload.get("overview")
-    if not isinstance(overview, str) or not overview.strip():
-        raise SummarizeError("LLM payload missing 'overview' string")
-    key_points = payload.get("key_points")
-    if not isinstance(key_points, list) or not key_points:  # pragma: no cover - strict
-        raise SummarizeError("LLM payload missing 'key_points' array")  # pragma: no cover
-    # Filter and limit
-    kps = [str(k).strip() for k in key_points if str(k).strip()]
-    if not kps:
-        raise SummarizeError("LLM payload 'key_points' empty")
-    kps = kps[:5]
-    quotes_raw = payload.get("quotes", [])
-    if quotes_raw is None:
-        quotes_raw = []
-    if not isinstance(quotes_raw, list):
-        quotes_raw = []  # pragma: no cover
-    quotes: list[dict] = []
-    for q in quotes_raw[:3]:
-        if isinstance(q, dict):
-            txt = str(q.get("text", "")).strip()
-            if not txt:
+    # New nuggets format
+    if "nuggets" in payload:
+        nuggets = payload.get("nuggets")
+        if not isinstance(nuggets, list) or not nuggets:
+            raise SummarizeError("LLM payload missing 'nuggets' array")
+        cleaned: list[dict] = []
+        for n in nuggets[:7]:
+            if not isinstance(n, dict):
                 continue
-            start = q.get("start")
+            insight = str(n.get("insight", "")).strip()
+            if not insight:
+                continue
+            context = str(n.get("context", "")).strip()
+            why = str(n.get("why_it_matters", "")).strip() or str(n.get("why", "")).strip()
+            quote = str(n.get("quote", "")).strip()
+            # enforce <30 words for quote
+            if quote and len(quote.split()) > 30:
+                quote = " ".join(quote.split()[:30])
+            cleaned.append({
+                "insight": insight,
+                "context": context,
+                "why_it_matters": why,
+                "quote": quote,
+            })
+        if not cleaned:
+            raise SummarizeError("LLM payload 'nuggets' empty after validation")
+        # top5_best optional
+        top5 = payload.get("top5_best") or payload.get("top5") or []
+        if not isinstance(top5, list):
+            top5 = []
+        # filter to valid indices
+        top5_clean = []
+        for idx in top5[:5]:
             try:
-                start_f = float(start) if start is not None else 0.0
-            except (TypeError, ValueError):
-                start_f = 0.0
-            quotes.append({"text": txt, "start": start_f})
-        elif isinstance(q, str) and q.strip():  # pragma: no cover - lenient
-            quotes.append({"text": q.strip(), "start": 0.0})  # pragma: no cover
-    return {"overview": overview.strip(), "key_points": kps, "quotes": quotes}
+                i = int(idx)
+                if 0 <= i < len(cleaned) and i not in top5_clean:
+                    top5_clean.append(i)
+            except Exception:
+                continue
+        if not top5_clean:
+            # default ranking: first up to 5
+            top5_clean = list(range(min(5, len(cleaned))))
+        return {"nuggets": cleaned, "top5_best": top5_clean}
+    # Legacy fallback: overview/key_points/quotes -> convert to nuggets for backwards compat
+    overview = payload.get("overview")
+    if isinstance(overview, str) and overview.strip():
+        # Convert legacy to nuggets
+        kps = payload.get("key_points") or []
+        quotes = payload.get("quotes") or []
+        nuggets = []
+        for i, kp in enumerate(kps[:5]):
+            if not str(kp).strip():
+                continue
+            q = ""
+            if isinstance(quotes, list) and i < len(quotes):
+                qi = quotes[i]
+                if isinstance(qi, dict):
+                    q = str(qi.get("text", "")).strip()
+                elif isinstance(qi, str):
+                    q = qi.strip()
+            nuggets.append({
+                "insight": str(kp).strip(),
+                "context": "",
+                "why_it_matters": "",
+                "quote": " ".join(q.split()[:30]) if q else "",
+            })
+        if not nuggets:
+            # fallback single nugget from overview
+            nuggets = [{"insight": overview.strip(), "context": "", "why_it_matters": "", "quote": ""}]
+        return {"nuggets": nuggets, "top5_best": list(range(min(5, len(nuggets))))}
+    raise SummarizeError("LLM payload missing 'nuggets' (and no legacy overview)")
 
 
 def _call_openai_compatible(
@@ -229,7 +288,6 @@ def _call_openai_compatible(
             err_body = resp.text[:500]
         except Exception:  # pragma: no cover
             err_body = ""  # pragma: no cover
-        # Hint for opencode Go vs direct Meta API mixup
         hint = ""
         if resp.status_code == 401 and "opencode.ai/zen/go" in base_url:
             hint = " (Go key invalid? check opencode.ai/zen/go dashboard, or try --base-url https://api.meta.ai/v1 for direct Meta API)"
@@ -241,7 +299,6 @@ def _call_openai_compatible(
     try:
         data = resp.json()
     except Exception as exc:
-        # Include status code and hint about base-url
         body_preview = resp.text[:500].strip()
         hint = " (check --base-url, expected OpenAI-compatible /chat/completions)" if "Not Found" in body_preview else ""
         raise SummarizeError(f"LLM returned invalid JSON response (HTTP {resp.status_code}): {body_preview!r}{hint}") from exc
@@ -265,36 +322,33 @@ def _summarize_with_llm(
     timeout: float,
     temperature: float,
     max_input_chars: int | None,
+    basename: str,
     settings_api_key: str | None = None,
     service: str | None = None,
     account: str | None = None,
 ) -> tuple[dict, bool]:
     b = _normalize_backend(backend)
-    # Resolve model
     resolved_model = model or _default_model(b)
     if b == "lmstudio" and not resolved_model:
         raise SummarizeError("lmstudio/local backend requires --model (no default)")
     if not resolved_model:
-        # openrouter/opencode should have defaults but handle missing
         raise SummarizeError(f"{b} backend requires --model")
-    # Resolve base_url
     resolved_base = base_url or _default_base_url(b)
     if not resolved_base:
         raise SummarizeError(f"{b} backend requires --base-url")
-    # Resolve api_key for cloud backends
     needs_key = b in {"openrouter", "opencode"}
     resolved_key = _resolve_api_key(b, api_key, settings_api_key, service, account)
     if needs_key and not resolved_key:
         hint = f"podtx auth set --backend {b}" if b in {"openrouter", "opencode"} else "provide --api-key"
         raise SummarizeError(f"{b} backend requires API key (--api-key, env OPENROUTER_API_KEY/OPENCODE_API_KEY, or {hint})")
 
-    # Prepare transcript text (full by default, optional truncation)
     text = transcript.text.strip()
     if not text and transcript.segments:
         text = " ".join(s.text.strip() for s in transcript.segments if s.text.strip())
     text, truncated = _truncate_text(text, max_input_chars)
 
-    messages = _build_prompt(episode, text)
+    minutes = _duration_minutes(transcript)
+    messages = _build_prompt(episode, text, basename, minutes)
     raw_content = _call_openai_compatible(
         base_url=resolved_base,
         api_key=resolved_key,
@@ -308,7 +362,8 @@ def _summarize_with_llm(
     return validated, truncated
 
 
-def _build_fake_summary(episode: Episode, transcript: Transcript) -> dict:
+def _build_fake_summary(episode: Episode, transcript: Transcript, basename: str = "") -> dict:
+    # Keep legacy extractive overview/key_points/quotes for test compat, plus nuggets
     text = transcript.text.strip()
     if not text and transcript.segments:
         text = " ".join(s.text.strip() for s in transcript.segments if s.text.strip())
@@ -334,15 +389,41 @@ def _build_fake_summary(episode: Episode, transcript: Transcript) -> dict:
             idxs = [0, len(segs) // 2, len(segs) - 1]
         for i in idxs:
             seg = segs[i]
-            quotes.append(
-                {
-                    "start": round(float(seg.start), 3),
-                    "end": round(float(seg.end), 3),
-                    "text": seg.text.strip(),
-                    "timestamp": _format_timestamp(seg.start),
-                }
-            )
-    return {"overview": overview, "key_points": key_points, "quotes": quotes, "truncated": False}
+            quotes.append({
+                "start": round(float(seg.start), 3),
+                "end": round(float(seg.end), 3),
+                "text": seg.text.strip(),
+                "timestamp": _format_timestamp(seg.start),
+            })
+    # Derive nuggets from key_points for fake (extractive placeholder)
+    nuggets: list[dict] = []
+    for i, kp in enumerate(key_points[:3]):
+        ctx = f"{episode.show_title or 'Show'} — {basename}" if basename else (episode.show_title or "")
+        q = quotes[i]["text"] if i < len(quotes) else ""
+        if q and len(q.split()) > 30:
+            q = " ".join(q.split()[:30])
+        nuggets.append({
+            "insight": kp,
+            "context": ctx,
+            "why_it_matters": "Extractive placeholder — replace with LLM nuggets via --backend openrouter|opencode|lmstudio.",
+            "quote": q,
+            "start": quotes[i]["start"] if i < len(quotes) else 0.0,
+            "end": quotes[i]["end"] if i < len(quotes) else 5.0,
+            "timestamp": quotes[i]["timestamp"] if i < len(quotes) else "00:00",
+        })
+    if not nuggets:
+        # fallback single nugget from overview/text
+        insight = overview.strip() if overview.strip() else (text[:200].strip() or "No transcript")
+        nuggets = [{
+            "insight": insight,
+            "context": basename,
+            "why_it_matters": "No transcript content.",
+            "quote": quotes[0]["text"] if quotes else "",
+            "start": quotes[0]["start"] if quotes else 0.0,
+            "end": quotes[0]["end"] if quotes else 5.0,
+            "timestamp": quotes[0]["timestamp"] if quotes else "00:00",
+        }]
+    return {"overview": overview, "key_points": key_points, "quotes": quotes, "nuggets": nuggets, "top5_best": list(range(min(5, len(nuggets)))), "truncated": False}
 
 
 @dataclass
@@ -364,25 +445,21 @@ def build_summary(
     timeout: float = 60.0,
     temperature: float = 0.3,
     max_input_chars: int | None = None,
+    basename: str = "",
     settings_api_key: str | None = None,
     service: str | None = None,
     account: str | None = None,
 ) -> dict:
-    """Build summary via backend.
-
-    Returns dict with overview, key_points, quotes (timestamped), backend, model etc.
-    """
+    """Build summary via backend. Returns dict with nuggets (and legacy overview/key_points/quotes for compat)."""
     b = _normalize_backend(backend)
     if b not in _SUMMARY_BACKENDS and backend.lower().strip() not in _ALIAS:
-        # Check normalized not in set
         if b not in _SUMMARY_BACKENDS:
             raise ValueError(f"Unknown summary backend {backend!r}. Choose from: {', '.join(sorted(_SUMMARY_BACKENDS))}")
-    # Also validate original includes alias? Already handled.
     if b not in _SUMMARY_BACKENDS:
         raise ValueError(f"Unknown summary backend {backend!r}. Choose from: {', '.join(sorted(_SUMMARY_BACKENDS))}")
 
     if b == "fake":
-        inner = _build_fake_summary(episode, transcript)
+        inner = _build_fake_summary(episode, transcript, basename=basename)
         summary = {
             "title": episode.title,
             "show": episode.show_title,
@@ -392,13 +469,15 @@ def build_summary(
             "overview": inner["overview"],
             "key_points": inner["key_points"],
             "quotes": inner["quotes"],
+            "nuggets": inner["nuggets"],
+            "top5_best": inner["top5_best"],
             "backend": b,
             "model": None,
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "truncated": False,
         }
         return summary
 
-    # LLM backends
     validated, truncated = _summarize_with_llm(
         episode,
         transcript,
@@ -409,56 +488,67 @@ def build_summary(
         timeout=timeout,
         temperature=temperature,
         max_input_chars=max_input_chars,
+        basename=basename,
         settings_api_key=settings_api_key,
         service=service,
         account=account,
     )
-    # Re-anchor quotes to transcript segments for timestamps
-    # LLM quotes may have start or not; we map to timestamp via _format_timestamp
-    raw_quotes = validated["quotes"]
+    # Anchor nugget quotes to transcript segments for timestamps
+    nuggets = validated["nuggets"]
+    top5 = validated["top5_best"]
     anchored: list[dict] = []
     segs = transcript.segments
-    for q in raw_quotes:
-        txt = q["text"].strip()
-        start = float(q.get("start", 0.0))
-        # Try to find closest segment containing text for better timestamp?
-        # Simple: if start is 0 and we have segs, try to find text in segments
-        if start == 0.0 and segs:
-            found = None
-            for seg in segs:
-                if txt.lower() in seg.text.lower() or seg.text.lower() in txt.lower():
-                    found = seg
-                    break
-            if found:
-                start = float(found.start)
-                end = float(found.end)
-            else:
-                end = start + 5.0
-        else:
-            end = start + 5.0
-            # Try to find matching segment for end
-            for seg in segs:
-                if abs(float(seg.start) - start) < 0.5:
-                    end = float(seg.end)
-                    break
-        anchored.append(
-            {
-                "start": round(start, 3),
-                "end": round(end, 3),
-                "text": txt,
-                "timestamp": _format_timestamp(start),
-            }
-        )
-    # Fallback to fake quotes if LLM returned none but we have segments? Keep empty.
+    for n in nuggets:
+        quote = n.get("quote", "").strip()
+        if not quote:
+            anchored.append({**n, "start": 0.0, "end": 0.0, "timestamp": ""})
+            continue
+        # Try to find verbatim in segments
+        found_start = None
+        found_end = None
+        for seg in segs:
+            if quote.lower() in seg.text.lower() or seg.text.lower() in quote.lower():
+                found_start = float(seg.start)
+                found_end = float(seg.end)
+                break
+        # Also check if LLM provided start (not in new schema, but handle)
+        if found_start is None:
+            # fallback: try to find any segment containing a chunk of quote
+            words = quote.split()
+            if len(words) >= 4:
+                chunk = " ".join(words[:4]).lower()
+                for seg in segs:
+                    if chunk in seg.text.lower():
+                        found_start = float(seg.start)
+                        found_end = float(seg.end)
+                        break
+        start = found_start if found_start is not None else 0.0
+        end = found_end if found_end is not None else (start + 5.0 if start else 0.0)
+        # enforce <30 words already done in validation
+        anchored.append({
+            "insight": n["insight"],
+            "context": n["context"] or f"{episode.show_title or ''} — {basename}".strip(" —"),
+            "why_it_matters": n["why_it_matters"],
+            "quote": quote,
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "timestamp": _format_timestamp(start) if start else "",
+        })
+    # Legacy compat
+    overview = anchored[0]["insight"] if anchored else ""
+    key_points = [n["insight"] for n in anchored]
+    quotes = [{"start": n["start"], "end": n["end"], "text": n["quote"], "timestamp": n["timestamp"]} for n in anchored if n["quote"]]
     summary = {
         "title": episode.title,
         "show": episode.show_title,
         "episode": episode.episode_num,
         "guid": episode.guid,
         "source": episode.enclosure_url,
-        "overview": validated["overview"],
-        "key_points": validated["key_points"],
-        "quotes": anchored,
+        "overview": overview,
+        "key_points": key_points,
+        "quotes": quotes,
+        "nuggets": anchored,
+        "top5_best": top5,
         "backend": b,
         "model": model or _default_model(b),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -490,35 +580,84 @@ def _summary_to_markdown(summary: dict) -> str:
     if summary.get("truncated"):
         lines.append("")
         lines.append("> _Transcript truncated to fit context window_")
+    # Best of Show if present
+    top5 = summary.get("top5_best") or []
+    nuggets = summary.get("nuggets") or []
+    # Fallback to legacy
+    if not nuggets and summary.get("overview"):
+        lines.append("")
+        lines.append("## Overview")
+        lines.append("")
+        lines.append(summary.get("overview", "").strip() or "_No overview_")
+        lines.append("")
+        lines.append("## Key Points")
+        lines.append("")
+        kps = summary.get("key_points") or []
+        if kps:
+            for kp in kps:
+                lines.append(f"- {kp.strip()}")
+        else:
+            lines.append("- _No key points_")
+        lines.append("")
+        lines.append("## Quotes")
+        lines.append("")
+        quotes = summary.get("quotes") or []
+        if quotes:
+            for q in quotes:
+                ts = q.get("timestamp", "")
+                txt = q.get("text", "").strip()
+                start = q.get("start", "")
+                if ts:
+                    lines.append(f"- [{ts}] {txt} ({start}s)")
+                else:
+                    lines.append(f"- {txt}")
+        else:
+            lines.append("_No quotes_")
+        lines.append("")
+        return "\n".join(lines)
+
+    # New nuggets markdown
     lines.append("")
-    lines.append("## Overview")
+    if top5 and nuggets:
+        lines.append("## Best of Show (Top 5)")
+        lines.append("")
+        for rank, idx in enumerate(top5[:5], 1):
+            if 0 <= idx < len(nuggets):
+                n = nuggets[idx]
+                lines.append(f"{rank}. **{n.get('insight','').strip()}**")
+                if n.get("quote"):
+                    ts = n.get("timestamp", "")
+                    if ts:
+                        lines.append(f"   — \"{n.get('quote','').strip()}\" [{ts}]")
+                    else:
+                        lines.append(f"   — \"{n.get('quote','').strip()}\"")
+                if n.get("why_it_matters"):
+                    lines.append(f"   *Why:* {n.get('why_it_matters','').strip()}")
+                if n.get("context"):
+                    lines.append(f"   *Context:* {n.get('context','').strip()}")
+        lines.append("")
+    lines.append("## Nuggets")
     lines.append("")
-    lines.append(summary.get("overview", "").strip() or "_No overview_")
-    lines.append("")
-    lines.append("## Key Points")
-    lines.append("")
-    kps = summary.get("key_points") or []
-    if kps:
-        for kp in kps:
-            lines.append(f"- {kp.strip()}")
+    if nuggets:
+        for i, n in enumerate(nuggets):
+            lines.append(f"### {i+1}. {n.get('insight','').strip()}")
+            lines.append("")
+            if n.get("context"):
+                lines.append(f"*Context:* {n.get('context','').strip()}")
+                lines.append("")
+            if n.get("why_it_matters"):
+                lines.append(f"*Why it matters:* {n.get('why_it_matters','').strip()}")
+                lines.append("")
+            if n.get("quote"):
+                ts = n.get("timestamp", "")
+                if ts:
+                    lines.append(f"> \"{n.get('quote','').strip()}\" — [{ts}]")
+                else:
+                    lines.append(f"> \"{n.get('quote','').strip()}\"")
+                lines.append("")
     else:
-        lines.append("- _No key points_")
-    lines.append("")
-    lines.append("## Quotes")
-    lines.append("")
-    quotes = summary.get("quotes") or []
-    if quotes:
-        for q in quotes:
-            ts = q.get("timestamp", "")
-            txt = q.get("text", "").strip()
-            start = q.get("start", "")
-            if ts:
-                lines.append(f"- [{ts}] {txt} ({start}s)")
-            else:
-                lines.append(f"- {txt}")
-    else:
-        lines.append("_No quotes_")
-    lines.append("")
+        lines.append("_No nuggets_")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -577,6 +716,7 @@ def summarize_transcript(
         timeout=timeout,
         temperature=temperature,
         max_input_chars=max_input_chars,
+        basename=json_path.stem,
         settings_api_key=settings_api_key,
         service=service,
         account=account,

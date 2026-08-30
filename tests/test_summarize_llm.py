@@ -64,7 +64,17 @@ def _llm_response(overview="OV", key_points=None, quotes=None):
         key_points = ["kp1", "kp2", "kp3"]
     if quotes is None:
         quotes = [{"text": "First sentence is overview.", "start": 0.0}]
-    return json.dumps({"overview": overview, "key_points": key_points, "quotes": quotes})
+    # New nuggets format for refactored summarize
+    nuggets = []
+    q0 = quotes[0].get("text", "") if quotes and isinstance(quotes[0], dict) else ""
+    nuggets.append({"insight": overview, "context": "Fake Show — ep", "why_it_matters": "why", "quote": q0})
+    for i, kp in enumerate(key_points[:4]):
+        q = ""
+        if i + 1 < len(quotes) and isinstance(quotes[i + 1], dict):
+            q = quotes[i + 1].get("text", "")
+        nuggets.append({"insight": kp, "context": "ctx", "why_it_matters": "why", "quote": q})
+    nuggets = nuggets[:5]
+    return json.dumps({"nuggets": nuggets, "top5_best": list(range(len(nuggets)))})
 
 
 # ── _truncate_text ──
@@ -113,39 +123,39 @@ def test_extract_invalid():
 
 # ── _validate_llm_payload ──
 def test_validate_ok():
-    p = {"overview": "ov", "key_points": ["a", "b"], "quotes": [{"text": "t", "start": 1}]}
+    p = {"nuggets": [{"insight": "ov", "context": "ctx", "why_it_matters": "why", "quote": "t"}], "top5_best": [0]}
     out = _validate_llm_payload(p)
-    assert out["overview"] == "ov"
-    assert len(out["key_points"]) == 2
-    assert out["quotes"][0]["text"] == "t"
+    assert out["nuggets"][0]["insight"] == "ov"
+    assert len(out["nuggets"]) == 1
+    assert out["nuggets"][0]["quote"] == "t"
 
 
 def test_validate_missing_overview():
     try:
-        _validate_llm_payload({"key_points": ["a"]})
+        _validate_llm_payload({"nuggets": []})
         assert False
     except SummarizeError as e:
-        assert "overview" in str(e).lower()
+        assert "nuggets" in str(e).lower()
 
 
 def test_validate_empty_key_points():
     try:
-        _validate_llm_payload({"overview": "ov", "key_points": ["   "]})
+        _validate_llm_payload({"nuggets": [{"insight": "   ", "context": "ctx", "why_it_matters": "why", "quote": ""}]})
         assert False
     except SummarizeError:
         pass
 
 
 def test_validate_quotes_string_form():
-    p = {"overview": "ov", "key_points": ["a"], "quotes": "notalist"}
+    p = {"nuggets": [{"insight": "ov", "context": "ctx", "why_it_matters": "why", "quote": ""}], "top5_best": [0]}
     out = _validate_llm_payload(p)
-    assert out["quotes"] == []
+    assert out["nuggets"][0]["quote"] == ""
 
 
 def test_validate_quotes_lenient_str():
-    p = {"overview": "ov", "key_points": ["a"], "quotes": ["just text"]}
+    p = {"nuggets": [{"insight": "ov", "context": "ctx", "why_it_matters": "why", "quote": "just text"}], "top5_best": [0]}
     out = _validate_llm_payload(p)
-    assert out["quotes"][0]["text"] == "just text"
+    assert out["nuggets"][0]["quote"] == "just text"
 
 
 # ── _call_openai_compatible ──
@@ -364,10 +374,10 @@ def test_build_quote_anchoring(monkeypatch):
 def test_build_quote_no_match(monkeypatch):
     ep = _fake_episode()
     tx = _fake_transcript()
-    _mock_llm(monkeypatch, json.dumps({"overview": "ov", "key_points": ["a"], "quotes": [{"text": "no match", "start": 5}]}))
+    _mock_llm(monkeypatch, json.dumps({"nuggets": [{"insight": "a", "context": "ctx", "why_it_matters": "why", "quote": "no match"}], "top5_best": [0]}))
     summary = build_summary(ep, tx, backend="openrouter", api_key="k")
-    assert summary["quotes"][0]["text"] == "no match"
-    assert summary["quotes"][0]["start"] == 5
+    assert summary["nuggets"][0]["quote"] == "no match"
+    assert summary["nuggets"][0]["start"] == 0.0
 
 
 def test_build_invalid_llm_json(monkeypatch):

@@ -170,9 +170,8 @@ def test_summarize_single_file_md(tmp_path: Path) -> None:
     written = summarize_transcript(json_path, formats=("md",), backend="fake")
     assert written[0].name == "ep.summary.md"
     body = written[0].read_text(encoding="utf-8")
-    assert "## Overview" in body
-    assert "## Key Points" in body
-    assert "## Quotes" in body
+    assert "## Nuggets" in body
+    assert "Best of Show" in body
     assert "offline" in body.lower()
     assert "—" not in body or True  # just ensure no crash
 
@@ -212,7 +211,7 @@ def test_cli_summarize_single_file_md_format(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.stdout + result.stderr
     assert (tmp_path / "ep.summary.md").is_file()
     body = (tmp_path / "ep.summary.md").read_text(encoding="utf-8")
-    assert "## Overview" in body
+    assert "## Nuggets" in body
 
 
 def test_cli_summarize_single_file_both_formats(tmp_path: Path) -> None:
@@ -426,10 +425,9 @@ def test_summarize_markdown_sidecar_content(tmp_path: Path) -> None:
     runner.invoke(app, ["summarize", str(json_path), "--format", "md"])
     md = (tmp_path / "ep.summary.md").read_text(encoding="utf-8")
     assert md.startswith("# Summary:")
-    assert "## Overview" in md
-    assert "## Key Points" in md
-    assert "## Quotes" in md
-    assert "- [" in md  # timestamped quote bullet
+    assert "## Nuggets" in md
+    assert "Best of Show" in md
+    assert "- [" in md or ">" in md  # quote bullet or blockquote
 
 
 def test_cli_summarize_broken_json_reports_error(tmp_path: Path) -> None:

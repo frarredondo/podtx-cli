@@ -36,13 +36,13 @@ def _write_json(tmp_path: Path, basename="ep"):
 
 def test_cli_summarize_openrouter_mocked(tmp_path: Path):
     jp = _write_json(tmp_path)
-    fake_payload = json.dumps({"overview": "LLM OV", "key_points": ["a", "b"], "quotes": [{"text": "hello", "start": 0}]})
+    fake_payload = json.dumps({"nuggets": [{"insight": "LLM OV", "context": "ctx", "why_it_matters": "why", "quote": "hello"}], "top5_best": [0]})
     with patch("podtx.summarize._call_openai_compatible", return_value=fake_payload):
         result = runner.invoke(app, ["summarize", str(jp), "--backend", "openrouter", "--api-key", "sk-test"])
         assert result.exit_code == 0, result.stdout + result.stderr
         assert (tmp_path / "ep.summary.json").is_file()
         data = json.loads((tmp_path / "ep.summary.json").read_text())
-        assert data["overview"] == "LLM OV"
+        assert data["nuggets"][0]["insight"] == "LLM OV"
         assert data["backend"] == "openrouter"
 
 

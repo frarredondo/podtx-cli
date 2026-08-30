@@ -47,20 +47,20 @@ def test_validate_payload_non_dict():
 
 def test_validate_payload_missing_key_points_list():
     try:
-        _validate_llm_payload({"overview": "ov", "key_points": "bad"})
+        _validate_llm_payload({"nuggets": [{"insight": "", "context": "ctx", "why_it_matters": "why", "quote": ""}]})
         assert False
     except SummarizeError:
         pass
 
 
 def test_validate_payload_quotes_not_list():
-    out = _validate_llm_payload({"overview": "ov", "key_points": ["a"], "quotes": "bad"})
-    assert out["quotes"] == []
+    out = _validate_llm_payload({"nuggets": [{"insight": "ov", "context": "ctx", "why_it_matters": "why", "quote": ""}], "top5_best": [0]})
+    assert out["nuggets"][0]["quote"] == ""
 
 
 def test_validate_payload_quotes_none():
-    out = _validate_llm_payload({"overview": "ov", "key_points": ["a"], "quotes": None})
-    assert out["quotes"] == []
+    out = _validate_llm_payload({"nuggets": [{"insight": "ov", "context": "ctx", "why_it_matters": "why", "quote": ""}], "top5_best": [0]})
+    assert out["nuggets"][0]["quote"] == ""
 
 
 def test_extract_json_with_trailing():
@@ -89,16 +89,17 @@ def test_build_summary_fake_no_text():
 def test_build_summary_llm_bad_start_type(monkeypatch):
     ep = Episode(guid="g", title="T", enclosure_url="https://example.com")
     tx = Transcript(text="hello world", segments=[], language="en", model="m", engine="fake")
-    fake_payload = json.dumps({"overview": "ov", "key_points": ["a"], "quotes": [{"text": "hi", "start": "bad"}]})
+    fake_payload = json.dumps({"nuggets": [{"insight": "a", "context": "ctx", "why_it_matters": "why", "quote": "hi"}], "top5_best": [0]})
     monkeypatch.setattr("podtx.summarize._call_openai_compatible", lambda **kw: fake_payload)
     summary = build_summary(ep, tx, backend="openrouter", api_key="k")
-    assert summary["quotes"][0]["start"] == 0.0
+    # quote "hi" not in segments, so start 0
+    assert summary["nuggets"][0]["start"] == 0.0
 
 
 def test_build_summary_llm_empty_text_fallback(monkeypatch):
     ep = Episode(guid="g", title="T", enclosure_url="https://example.com")
     tx = Transcript(text="   ", segments=[Segment(0,1,"seg text")], language="en", model="m", engine="fake")
-    fake_payload = json.dumps({"overview": "ov", "key_points": ["a"], "quotes": []})
+    fake_payload = json.dumps({"nuggets": [{"insight": "ov", "context": "ctx", "why_it_matters": "why", "quote": ""}], "top5_best": [0]})
     # capture prompt to ensure text fallback used
     captured = {}
     def fake_call(**kw):
