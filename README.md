@@ -61,6 +61,7 @@ podtx transcribe https://example.com/audio/ep01.mp3 --engine whisper
 | `podtx transcribe <target>` | One-shot RSS / URL / file |
 | `podtx format <json\|--feed\|--all>` | Re-format existing transcript JSON (no ASR) |
 | `podtx rename --from-title --feed\|--all` | Fix `_000_` filenames from title episode numbers |
+| `podtx summarize <json\|--feed\|--all>` | Summarize existing transcripts (no ASR) to `episode.summary.json` / `.md` |
 | `podtx search <query> [--feed] [--limit] [--since] [--until] [--reindex]` | Offline FTS5 search over transcripts |
 
 ### Useful flags
@@ -105,6 +106,34 @@ episodes, and done episodes whose transcript files no longer exist (read-only):
 podtx doctor
 ```
 
+## Summarize (no ASR)
+
+Create short summaries from existing transcript JSON without re-running ASR:
+
+```bash
+podtx summarize path/to/episode.json
+podtx summarize path/to/episode.json --format md            # also write a markdown render
+podtx summarize --feed corecursive-coding-stories --limit 5
+podtx summarize --all --limit 10
+```
+
+Output is a stable sidecar written next to the transcript (or `--out-dir`):
+`episode.summary.json` (default) and/or `episode.summary.md` with `--format md`,
+containing a short overview, key points/takeaways, and optional timestamped quotes.
+
+Backends — explicitly opt-in, never silent network calls:
+
+| Backend | Description | Credentials |
+|---------|-------------|-------------|
+| `fake` (default) | Offline extractive summary — no network, no model | none |
+| `openrouter` | Hosted LLM via OpenRouter | `podtx auth set openrouter`, or `OPENROUTER_API_KEY`, or `--api-key` |
+| `opencode` | OpenCode Zen Go / Meta-hosted models | `podtx auth set opencode`, or `OPENCODE_API_KEY`, or `--api-key` |
+| `lmstudio` / `local` | Local LM Studio (OpenAI-compatible) | none — defaults to `http://localhost:1234/v1` |
+
+- `--backend` selects the backend; `--model` overrides the default model id; `--base-url` overrides the endpoint (e.g. a non-standard LM Studio port).
+- `--temperature` (default 0.3), `--timeout` (default 60s), and `--max-input-chars` (default: no truncation) tune the LLM calls.
+- Same precedence as transcription: CLI flags > environment (`PODCAST_TRANSCRIBER_SUMMARIZE_*`) > `config.toml` (`summarize_backend`, `summarize_model`, …) > defaults.
+
 ## Data & config
 
 - Data (SQLite state, transcripts, temp audio): `~/.local/share/podcast-transcriber/`
@@ -124,6 +153,10 @@ local_attention = true
 # local_attention_context_size = 256
 # readable = true
 # cleanup = true
+# summarize_backend = "fake"   # fake (offline) | openrouter | opencode | lmstudio
+# summarize_model = "<model-id>"
+# summarize_timeout = 60.0
+# summarize_temperature = 0.3
 ```
 
 Precedence: **CLI flags > environment (`PODCAST_TRANSCRIBER_*`) > config.toml > defaults**.
