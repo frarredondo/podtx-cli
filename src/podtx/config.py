@@ -18,6 +18,18 @@ DEFAULT_FORMATS = ("txt", "json")
 DEFAULT_LOCAL_ATTENTION = True
 DEFAULT_LOCAL_ATTENTION_CONTEXT_SIZE = 256
 
+# Summarize defaults
+DEFAULT_SUMMARIZE_BACKEND = "fake"
+DEFAULT_OPENROUTER_MODEL = "meta/muse-spark-1.2-contributor"
+DEFAULT_OPENCODE_MODEL = "muse-spark-1.2-contributor"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
+DEFAULT_LMSTUDIO_BASE_URL = "http://localhost:1234/v1"
+# Direct Meta API (for Muse Spark without Go)
+DEFAULT_META_BASE_URL = "https://api.meta.ai/v1"
+DEFAULT_SUMMARIZE_TIMEOUT = 60.0
+DEFAULT_SUMMARIZE_TEMPERATURE = 0.3
+
 
 def default_data_dir() -> Path:
     return Path(user_data_dir(APP_NAME, appauthor=False))
@@ -43,6 +55,16 @@ class Settings:
     cleanup: bool = False
     correct_names: bool = False
     trim_start: float = 0.0
+    # Summarize
+    summarize_backend: str = DEFAULT_SUMMARIZE_BACKEND
+    summarize_model: str | None = None
+    summarize_base_url: str | None = None
+    summarize_api_key: str | None = None
+    summarize_api_key_service: str | None = None
+    summarize_api_key_account: str | None = None
+    summarize_timeout: float = DEFAULT_SUMMARIZE_TIMEOUT
+    summarize_temperature: float = DEFAULT_SUMMARIZE_TEMPERATURE
+    summarize_max_input_chars: int | None = None
 
     def resolved_model(self) -> str:
         if self.model:
@@ -99,6 +121,15 @@ def load_settings(
     cleanup: bool | None = None,
     correct_names: bool | None = None,
     trim_start: float | int | None = None,
+    summarize_backend: str | None = None,
+    summarize_model: str | None = None,
+    summarize_base_url: str | None = None,
+    summarize_api_key: str | None = None,
+    summarize_api_key_service: str | None = None,
+    summarize_api_key_account: str | None = None,
+    summarize_timeout: float | None = None,
+    summarize_temperature: float | None = None,
+    summarize_max_input_chars: int | None = None,
     config_path: Path | None = None,
 ) -> Settings:
     """Resolve settings with precedence: CLI flags > env > TOML > defaults."""
@@ -145,6 +176,26 @@ def load_settings(
         if ts < 0:  # pragma: no cover
             raise ValueError("trim_start must be >= 0")  # pragma: no cover
         settings = replace(settings, trim_start=ts)
+    # Summarize TOML
+    if "summarize_backend" in toml:
+        settings = replace(settings, summarize_backend=str(toml["summarize_backend"]))
+    if "summarize_model" in toml:
+        settings = replace(settings, summarize_model=str(toml["summarize_model"]))
+    if "summarize_base_url" in toml:
+        settings = replace(settings, summarize_base_url=str(toml["summarize_base_url"]))
+    if "summarize_api_key" in toml:
+        settings = replace(settings, summarize_api_key=str(toml["summarize_api_key"]))
+    if "summarize_api_key_service" in toml:
+        settings = replace(settings, summarize_api_key_service=str(toml["summarize_api_key_service"]))
+    if "summarize_api_key_account" in toml:
+        settings = replace(settings, summarize_api_key_account=str(toml["summarize_api_key_account"]))
+    if "summarize_timeout" in toml:
+        settings = replace(settings, summarize_timeout=float(toml["summarize_timeout"]))
+    if "summarize_temperature" in toml:
+        settings = replace(settings, summarize_temperature=float(toml["summarize_temperature"]))
+    if "summarize_max_input_chars" in toml:
+        v = toml["summarize_max_input_chars"]
+        settings = replace(settings, summarize_max_input_chars=int(v) if v is not None else None)
 
     # Env
     if (v := _env("ENGINE")) is not None:
@@ -183,6 +234,38 @@ def load_settings(
         if ts_env < 0:  # pragma: no cover
             raise ValueError("trim_start must be >= 0")  # pragma: no cover
         settings = replace(settings, trim_start=ts_env)
+    # Summarize env
+    if (v := _env("SUMMARIZE_BACKEND")) is not None:
+        settings = replace(settings, summarize_backend=v)
+    if (v := _env("SUMMARIZE_MODEL")) is not None:
+        settings = replace(settings, summarize_model=v)
+    if (v := _env("SUMMARIZE_BASE_URL")) is not None:
+        settings = replace(settings, summarize_base_url=v)
+    if (v := _env("SUMMARIZE_API_KEY")) is not None:
+        settings = replace(settings, summarize_api_key=v)
+    if (v := _env("SUMMARIZE_API_KEY_SERVICE")) is not None:
+        settings = replace(settings, summarize_api_key_service=v)
+    if (v := _env("SUMMARIZE_API_KEY_ACCOUNT")) is not None:
+        settings = replace(settings, summarize_api_key_account=v)
+    if (v := _env("SUMMARIZE_TIMEOUT")) is not None:
+        settings = replace(settings, summarize_timeout=float(v))
+    if (v := _env("SUMMARIZE_TEMPERATURE")) is not None:
+        settings = replace(settings, summarize_temperature=float(v))
+    if (v := _env("SUMMARIZE_MAX_INPUT_CHARS")) is not None:
+        settings = replace(settings, summarize_max_input_chars=int(v))
+    # Provider-specific env aliases (direct api keys)
+    if (v := os.environ.get("OPENROUTER_API_KEY")) is not None:  # not prefixed
+        settings = replace(settings, summarize_api_key=v)
+    if (v := os.environ.get("OPENCODE_API_KEY")) is not None:
+        settings = replace(settings, summarize_api_key=v)
+    if (v := os.environ.get("MODEL_API_KEY")) is not None:
+        settings = replace(settings, summarize_api_key=v)
+    if (v := os.environ.get("LMSTUDIO_BASE_URL")) is not None:
+        settings = replace(settings, summarize_base_url=v)
+    if (v := os.environ.get("OPENCODE_BASE_URL")) is not None:
+        settings = replace(settings, summarize_base_url=v)
+    if (v := os.environ.get("OPENROUTER_BASE_URL")) is not None:
+        settings = replace(settings, summarize_base_url=v)
 
     # CLI flags (only override when explicitly provided)
     if engine is not None:
@@ -218,6 +301,24 @@ def load_settings(
         if ts_cli < 0:  # pragma: no cover
             raise ValueError("trim_start must be >= 0")  # pragma: no cover
         settings = replace(settings, trim_start=ts_cli)
+    if summarize_backend is not None:
+        settings = replace(settings, summarize_backend=summarize_backend)
+    if summarize_model is not None:
+        settings = replace(settings, summarize_model=summarize_model)
+    if summarize_base_url is not None:
+        settings = replace(settings, summarize_base_url=summarize_base_url)
+    if summarize_api_key is not None:
+        settings = replace(settings, summarize_api_key=summarize_api_key)
+    if summarize_api_key_service is not None:
+        settings = replace(settings, summarize_api_key_service=summarize_api_key_service)
+    if summarize_api_key_account is not None:
+        settings = replace(settings, summarize_api_key_account=summarize_api_key_account)
+    if summarize_timeout is not None:
+        settings = replace(settings, summarize_timeout=summarize_timeout)
+    if summarize_temperature is not None:
+        settings = replace(settings, summarize_temperature=summarize_temperature)
+    if summarize_max_input_chars is not None:
+        settings = replace(settings, summarize_max_input_chars=summarize_max_input_chars)
 
     return settings
 
