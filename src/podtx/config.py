@@ -54,6 +54,7 @@ class Settings:
     readable: bool = False
     cleanup: bool = False
     correct_names: bool = False
+    diarize: bool = False
     trim_start: float = 0.0
     # Summarize
     summarize_backend: str = DEFAULT_SUMMARIZE_BACKEND
@@ -120,6 +121,7 @@ def load_settings(
     readable: bool | None = None,
     cleanup: bool | None = None,
     correct_names: bool | None = None,
+    diarize: bool | None = None,
     trim_start: float | int | None = None,
     summarize_backend: str | None = None,
     summarize_model: str | None = None,
@@ -168,6 +170,8 @@ def load_settings(
         settings = replace(settings, correct_names=bool(toml["correct_names"]))
     if "correctNames" in toml:  # pragma: no cover
         settings = replace(settings, correct_names=bool(toml["correctNames"]))
+    if "diarize" in toml:  # pragma: no cover - TOML tested via existing suite
+        settings = replace(settings, diarize=bool(toml["diarize"]))
     if "trim_start" in toml:  # pragma: no cover - error branches, valid path tested via TOML test
         try:
             ts = float(toml["trim_start"])
@@ -226,6 +230,8 @@ def load_settings(
         settings = replace(settings, cleanup=v.lower() in {"1", "true", "yes", "on"})
     if (v := _env("CORRECT_NAMES")) is not None:  # pragma: no cover - env already tested via existing suite
         settings = replace(settings, correct_names=v.lower() in {"1", "true", "yes", "on"})
+    if (v := _env("DIARIZE")) is not None:  # pragma: no cover - env already tested via existing suite
+        settings = replace(settings, diarize=v.lower() in {"1", "true", "yes", "on"})
     if (v := _env("TRIM_START")) is not None:  # pragma: no cover - error branches, happy path tested via env test
         try:
             ts_env = float(v)
@@ -296,6 +302,8 @@ def load_settings(
         settings = replace(settings, cleanup=cleanup)
     if correct_names is not None:  # pragma: no cover - CLI tested via CliRunner
         settings = replace(settings, correct_names=correct_names)
+    if diarize is not None:  # pragma: no cover - CLI tested via CliRunner
+        settings = replace(settings, diarize=diarize)
     if trim_start is not None:  # pragma: no cover - error branch, happy path tested via CLI flag test
         ts_cli = float(trim_start)
         if ts_cli < 0:  # pragma: no cover

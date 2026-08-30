@@ -149,6 +149,7 @@ def transcribe_local_file(
         readable=settings.readable,
         cleanup=settings.cleanup,
         correct_names=settings.correct_names,
+        diarize=settings.diarize,
     )
     if not settings.keep_audio and wav.exists():
         wav.unlink(missing_ok=True)
@@ -262,6 +263,7 @@ def process_episodes(
                     readable=settings.readable,
                     cleanup=settings.cleanup,
                     correct_names=settings.correct_names,
+                    diarize=settings.diarize,
                 )
                 results.append(paths)
                 for p in paths:

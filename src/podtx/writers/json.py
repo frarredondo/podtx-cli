@@ -15,6 +15,7 @@ def write_json(
     readable: bool = False,
     cleanup: bool = False,
     correct_names: bool = False,
+    diarize: bool = False,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if correct_names:
@@ -35,6 +36,7 @@ def write_json(
             cleanup=cleanup,
             correct_names=False,
             episode=episode,
+            diarize=diarize,
         )
         payload_subs = []
     payload = {
@@ -50,12 +52,14 @@ def write_json(
         "language": transcript.language,
         "readable": readable,
         "cleanup": cleanup,
+        "diarize": diarize,
         "text": payload_text,
         "segments": [
             {
                 "start": round_ts(s.start),
                 "end": round_ts(s.end),
                 "text": s.text,
+                **({"speaker": s.speaker} if s.speaker else {}),
             }
             for s in transcript.segments
         ],

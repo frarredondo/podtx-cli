@@ -40,11 +40,13 @@ def load_transcript_json(path: Path) -> tuple[Episode, Transcript]:
 
     segments: list[Segment] = []
     for raw in payload.get("segments") or []:
+        spk = raw.get("speaker")
         segments.append(
             Segment(
                 start=float(raw.get("start", 0.0)),
                 end=float(raw.get("end", 0.0)),
                 text=str(raw.get("text", "")).strip(),
+                speaker=str(spk) if spk else None,
             )
         )
 
@@ -162,6 +164,7 @@ def reformat_transcript(
     readable: bool = False,
     cleanup: bool = False,
     correct_names: bool = False,
+    diarize: bool = False,
     formats: tuple[str, ...] = ("txt", "json"),
 ) -> list[Path]:
     """Re-write outputs from an existing transcript JSON without re-running ASR."""
@@ -178,6 +181,7 @@ def reformat_transcript(
         readable=readable,
         cleanup=cleanup,
         correct_names=correct_names,
+        diarize=diarize,
     )
     _maybe_index_after_reformat(episode, transcript, written)
     return written
@@ -190,6 +194,7 @@ def reformat_many(
     readable: bool = False,
     cleanup: bool = False,
     correct_names: bool = False,
+    diarize: bool = False,
     formats: tuple[str, ...] = ("txt", "json"),
 ) -> BatchFormatResult:
     """Reformat many transcript JSON files; continue on per-file errors."""
@@ -202,6 +207,7 @@ def reformat_many(
                 readable=readable,
                 cleanup=cleanup,
                 correct_names=correct_names,
+                diarize=diarize,
                 formats=formats,
             )
         except (TranscriptJsonError, OSError, ValueError) as exc:
