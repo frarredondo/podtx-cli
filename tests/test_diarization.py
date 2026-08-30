@@ -197,3 +197,125 @@ def test_cli_sync_diarize_is_opt_in(tmp_path: Path):
     assert s.diarize is False
     s2 = load_settings(data_dir=tmp_path, diarize=True)
     assert s2.diarize is True
+
+
+def test_transcribe_local_file_real_backend_diarizes(tmp_path: Path, monkeypatch):
+    """transcribe_local_file with a real (non-fake) diarize backend calls diarize_transcript."""
+    import podtx.pipeline as pipeline_mod
+    from podtx.config import Settings
+
+    fake_audio = tmp_path / "episode.mp3"
+    fake_audio.write_bytes(b"fake")
+
+    def fake_convert(src: Path, dest: Path | None = None, *args, **kwargs) -> Path:
+        out = dest or src.with_suffix(".wav")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"wav")
+        return out
+
+    class FakeEngine:
+        name = "fake"
+        default_model = "fake-model"
+
+        def transcribe(self, audio_path: Path, *, model=None, language="en", **kwargs):
+            return Transcript(
+                text="hello world",
+                segments=[Segment(0.0, 2.0, "hello"), Segment(2.0, 4.0, "world")],
+                language=language,
+                model=model or self.default_model,
+                engine=self.name,
+            )
+
+    calls: list[dict] = []
+
+    def fake_diarize(transcript, **kwargs):
+        calls.append(kwargs)
+        return Transcript(
+            text=transcript.text,
+            segments=[Segment(s.start, s.end, s.text, speaker=f"SPEAKER_{i:02d}") for i, s in enumerate(transcript.segments)],
+            language=transcript.language,
+            model=transcript.model,
+            engine=transcript.engine,
+        )
+
+    monkeypatch.setattr(pipeline_mod, "convert_to_wav", fake_convert)
+    monkeypatch.setattr(pipeline_mod, "get_engine", lambda name: FakeEngine())
+    monkeypatch.setattr(pipeline_mod, "require_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("podtx.diarize.diarize_transcript", fake_diarize)
+
+    settings = Settings(data_dir=tmp_path / "data", diarize=True, diarize_backend="pyannote", quiet=True)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    episode = Episode(guid="g1", title="Test Episode", enclosure_url=str(fake_audio), show_title="Show")
+
+    from podtx.pipeline import transcribe_local_file
+    paths = transcribe_local_file(fake_audio, settings=settings, episode=episode, out_dir=out_dir)
+
+    assert calls, "diarize_transcript should be invoked for real backend"
+    assert calls[0]["backend"] == "pyannote"
+    assert any(p.suffix == ".txt" for p in paths)
+    body = next(p for p in paths if p.suffix == ".txt").read_text(encoding="utf-8")
+    assert "SPEAKER_00: hello" in body
+
+
+def test_process_episodes_real_backend_diarizes(tmp_path: Path, monkeypatch):
+    """process_episodes routes through diarize_transcript for real backends."""
+    import podtx.pipeline as pipeline_mod
+    from podtx.config import Settings
+
+    def fake_convert(src: Path, dest: Path | None = None, *args, **kwargs) -> Path:
+        out = dest or src.with_suffix(".wav")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"wav")
+        return out
+
+    class FakeEngine:
+        name = "fake"
+        default_model = "fake-model"
+
+        def transcribe(self, audio_path: Path, *, model=None, language="en", **kwargs):
+            return Transcript(
+                text="hello world",
+                segments=[Segment(0.0, 2.0, "hello"), Segment(2.0, 4.0, "world")],
+                language=language,
+                model=model or self.default_model,
+                engine=self.name,
+            )
+
+    def fake_download(episode: Episode, audio_dir: Path, quiet: bool = False, **kwargs) -> Path:
+        p = audio_dir / "fake_episode.mp3"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"audio")
+        return p
+
+    calls: list[dict] = []
+
+    def fake_diarize(transcript, **kwargs):
+        calls.append(kwargs)
+        return Transcript(
+            text=transcript.text,
+            segments=[Segment(s.start, s.end, s.text, speaker=f"SPEAKER_{i:02d}") for i, s in enumerate(transcript.segments)],
+            language=transcript.language,
+            model=transcript.model,
+            engine=transcript.engine,
+        )
+
+    monkeypatch.setattr(pipeline_mod, "convert_to_wav", fake_convert)
+    monkeypatch.setattr(pipeline_mod, "get_engine", lambda name: FakeEngine())
+    monkeypatch.setattr(pipeline_mod, "require_ffmpeg", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(pipeline_mod, "download_only", fake_download)
+    monkeypatch.setattr("podtx.diarize.diarize_transcript", fake_diarize)
+
+    settings = Settings(data_dir=tmp_path / "data", diarize=True, diarize_backend="hf", quiet=True)
+    out_dir = tmp_path / "transcripts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ep = Episode(guid="g1", title="Ep 1", enclosure_url="https://example.com/ep.mp3", show_title="Show")
+    from podtx.pipeline import process_episodes
+    results = process_episodes([ep], settings=settings, out_dir=out_dir)
+
+    assert len(results) == 1
+    assert calls, "diarize_transcript should be invoked for real backend"
+    assert calls[0]["backend"] == "hf"
+    txt_path = [p for p in results[0] if p.suffix == ".txt"][0]
+    assert "SPEAKER_00: hello" in txt_path.read_text(encoding="utf-8")
