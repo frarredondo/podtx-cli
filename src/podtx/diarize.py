@@ -150,7 +150,7 @@ def _load_pyannote_pipeline(model: str):
     try:
         from pyannote.audio import Pipeline
     except ImportError as exc:
-        raise DiarizeError("pyannote backend requires pyannote.audio (install with: uv sync --extra pyannote)") from exc
+        raise ImportError("pyannote.audio not installed. Install with: uv sync --extra pyannote or pip install pyannote.audio") from exc
     # Pipeline.from_pretrained handles HF_TOKEN via env
     try:
         pipeline = Pipeline.from_pretrained(model)
