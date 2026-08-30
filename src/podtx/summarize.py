@@ -235,6 +235,8 @@ def _call_openai_compatible(
             hint = " (Go key invalid? check opencode.ai/zen/go dashboard, or try --base-url https://api.meta.ai/v1 for direct Meta API)"
         elif resp.status_code == 401 and "api.meta.ai" in base_url:
             hint = " (Meta API key invalid? check https://api.meta.ai console, or try --base-url https://opencode.ai/zen/go/v1 for Go subscription)"
+        elif resp.status_code == 500 and "opencode.ai/zen/go" in base_url:
+            hint = " (Go 500 often = model not hosted on Go. Go hosts kimi-*/glm-*/deepseek-*, not Muse Spark. Try --backend openrouter --model meta/muse-spark-1.2-contributor or --base-url https://api.meta.ai/v1 --model muse-spark-1.2-contributor with a Meta key)"
         raise SummarizeError(f"LLM request failed ({resp.status_code}): {err_body}{hint}")
     try:
         data = resp.json()
