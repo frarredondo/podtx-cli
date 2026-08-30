@@ -22,10 +22,14 @@ from podtx.config import (
 from podtx.format_cmd import TranscriptJsonError, load_transcript_json
 from podtx.models import Episode, Transcript
 from podtx.providers import (
+    DEFAULT_DRY_OUTPUT_CHARS,
     Provider,
     ProviderError,
     available_providers,
     build_provider,
+    estimate_cost,
+    estimate_tokens,
+    get_model,
     normalize_backend,
     get_spec,
 )
@@ -340,6 +344,94 @@ def _split_chunks(transcript: Transcript, *, max_input_chars: int) -> list[str]:
                 _split_text(joined, max_chars=max_input_chars, overlap_chars=overlap)
             )
     return pieces
+
+
+@dataclass(frozen=True)
+class DryRunEstimate:
+    """Token/cost estimate for `podtx nuggets --dry-run` (no inference)."""
+
+    input_chars: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    context_length: int | None
+    chunked: bool
+    chunk_count: int
+    fits: bool | None
+    cost_usd: float | None
+    cost_known: bool
+    model_known: bool
+
+
+def estimate_dry_run(
+    episode: Episode,
+    transcript: Transcript,
+    *,
+    backend: str,
+    model: str | None,
+    max_input_chars: int | None,
+    providers: dict,
+    output_chars: int = DEFAULT_DRY_OUTPUT_CHARS,
+) -> DryRunEstimate:
+    """Estimate token usage and cost for a nugget extraction without running it.
+
+    ``providers`` is the raw models.dev provider map (an empty dict disables the
+    catalog). Estimates are still produced for the offline `fake` backend, but no
+    pricing applies. ``max_input_chars`` falls back to the nuggets default.
+    """
+    budget = (
+        max_input_chars
+        if max_input_chars is not None
+        else DEFAULT_NUGGETS_MAX_INPUT_CHARS
+    )
+    input_chars = len(_transcript_text(transcript))
+    input_tokens = estimate_tokens(input_chars)
+    output_tokens = estimate_tokens(output_chars)
+    total_tokens = input_tokens + output_tokens
+    chunks = _split_chunks(transcript, max_input_chars=budget)
+    chunked = len(chunks) > 1
+    if backend == "fake":
+        return DryRunEstimate(
+            input_chars=input_chars,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            context_length=None,
+            chunked=chunked,
+            chunk_count=len(chunks),
+            fits=None,
+            cost_usd=None,
+            cost_known=False,
+            model_known=False,
+        )
+    info = get_model(providers, backend, model or "")
+    model_known = info is not None
+    fits = None
+    if info is not None:
+        if info.context_length is None:
+            fits = None
+        else:
+            fits = input_tokens <= info.context_length
+    est = estimate_cost(
+        providers,
+        backend,
+        model or "",
+        input_chars=input_chars,
+        output_chars=output_chars,
+    )
+    return DryRunEstimate(
+        input_chars=input_chars,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        context_length=info.context_length if info is not None else None,
+        chunked=chunked,
+        chunk_count=len(chunks),
+        fits=fits,
+        cost_usd=est.cost_usd,
+        cost_known=est.cost_known,
+        model_known=model_known,
+    )
 
 
 def _transcript_text(transcript: Transcript) -> str:

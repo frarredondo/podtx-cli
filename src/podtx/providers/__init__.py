@@ -6,6 +6,20 @@ configured; `fake` (offline) does not go through this package.
 """
 
 from podtx.providers.base import Provider, ProviderError
+from podtx.providers.catalog import (
+    DEFAULT_DRY_OUTPUT_CHARS,
+    CatalogError,
+    CostEstimate,
+    ModelInfo,
+    catalog_providers,
+    estimate_cost,
+    estimate_tokens,
+    fetch_catalog,
+    get_model,
+    list_models,
+    load_catalog,
+    parse_catalog,
+)
 from podtx.providers.registry import (
     available_providers,
     build_provider,
@@ -15,11 +29,23 @@ from podtx.providers.registry import (
 )
 
 __all__ = [
+    "DEFAULT_DRY_OUTPUT_CHARS",
     "Provider",
     "ProviderError",
+    "CatalogError",
+    "CostEstimate",
+    "ModelInfo",
     "available_providers",
     "build_provider",
+    "catalog_providers",
+    "estimate_cost",
+    "estimate_tokens",
+    "fetch_catalog",
+    "get_model",
     "get_spec",
+    "list_models",
+    "load_catalog",
     "normalize_backend",
+    "parse_catalog",
     "resolve_api_key",
 ]

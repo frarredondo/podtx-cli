@@ -34,9 +34,10 @@ from podtx.nuggets import (
     _verify_quotes,
     _write_nugget_files,
     extract_nuggets_transcript,
+    estimate_dry_run,
     nuggets_many,
 )
-from podtx.providers import ProviderError
+from podtx.providers import ProviderError, estimate_tokens
 from podtx.writers import write_outputs
 
 
@@ -795,3 +796,179 @@ def test_batch_result_defaults() -> None:
     r = BatchNuggetsResult()
     assert r.ok == 0 and r.failed == 0 and r.skipped == 0
     assert r.written == [] and r.errors == []
+
+def _dry_api() -> dict:
+    return {
+        "openrouter": {
+            "id": "openrouter",
+            "name": "OpenRouter",
+            "models": {
+                "anthropic/claude-sonnet-4": {
+                    "id": "anthropic/claude-sonnet-4",
+                    "name": "Claude Sonnet 4",
+                    "limit": {"context": 200000, "output": 64000},
+                    "cost": {"input": 3.0, "output": 15.0},
+                },
+                "tiny/ctx": {
+                    "id": "tiny/ctx",
+                    "name": "Tiny Context",
+                    "limit": {"context": 10},
+                },
+                "openrouter/contextless": {
+                    "id": "openrouter/contextless",
+                    "name": "No Ctx",
+                    "limit": {"output": 1000},
+                },
+            },
+        }
+    }
+
+
+def test_estimate_dry_run_fake() -> None:
+    est = estimate_dry_run(
+        _episode(),
+        _transcript(),
+        backend="fake",
+        model=None,
+        max_input_chars=100_000,
+        providers=_dry_api(),
+    )
+    assert est.input_chars == len(_transcript().text.rstrip())
+    assert est.input_tokens == estimate_tokens(est.input_chars)
+    assert est.output_tokens == estimate_tokens(2000)
+    assert est.total_tokens == est.input_tokens + est.output_tokens
+    assert est.chunked is False
+    assert est.chunk_count == 1
+    assert est.fits is None
+    assert est.cost_usd is None
+    assert est.cost_known is False
+    assert est.model_known is False
+
+
+def test_estimate_dry_run_known_model_fits() -> None:
+    est = estimate_dry_run(
+        _episode(),
+        _transcript(),
+        backend="openrouter",
+        model="anthropic/claude-sonnet-4",
+        max_input_chars=100_000,
+        providers=_dry_api(),
+    )
+    assert est.fits is True
+    assert est.chunked is False
+    assert est.model_known is True
+    assert est.cost_known is True
+    assert est.cost_usd == pytest.approx(
+        est.input_tokens / 1e6 * 3.0 + est.output_tokens / 1e6 * 15.0
+    )
+
+
+def test_estimate_dry_run_known_model_too_small() -> None:
+    est = estimate_dry_run(
+        _episode(),
+        _transcript(),
+        backend="openrouter",
+        model="tiny/ctx",
+        max_input_chars=100_000,
+        providers=_dry_api(),
+    )
+    assert est.fits is False
+    assert est.chunked is False
+    assert est.model_known is True
+    assert est.cost_known is False
+
+
+def test_estimate_dry_run_unknown_model() -> None:
+    est = estimate_dry_run(
+        _episode(),
+        _transcript(),
+        backend="openrouter",
+        model="nope/x",
+        max_input_chars=100_000,
+        providers=_dry_api(),
+    )
+    assert est.fits is None
+    assert est.model_known is False
+    assert est.cost_known is False
+    assert est.cost_usd is None
+
+
+def test_estimate_dry_run_chunked() -> None:
+    tx = Transcript(
+        text=" ".join(["word"] * 60_000),
+        segments=[Segment(float(i), float(i) + 1, "word") for i in range(60_000)],
+        language="en",
+        model="m",
+        engine="fake",
+    )
+    est = estimate_dry_run(
+        _episode(),
+        tx,
+        backend="openrouter",
+        model="anthropic/claude-sonnet-4",
+        max_input_chars=10_000,
+        providers=_dry_api(),
+    )
+    assert est.chunked is True
+    assert est.chunk_count > 1
+    assert est.fits is True
+
+
+def test_estimate_dry_run_no_providers() -> None:
+    est = estimate_dry_run(
+        _episode(),
+        _transcript(),
+        backend="openrouter",
+        model="anthropic/claude-sonnet-4",
+        max_input_chars=100_000,
+        providers={},
+    )
+    assert est.model_known is False
+    assert est.fits is None
+    assert est.cost_usd is None
+    assert est.input_tokens == estimate_tokens(est.input_chars)
+
+
+def test_estimate_dry_run_default_max_input_chars() -> None:
+    tx = Transcript(
+        text=" ".join(["word"] * 60_000),
+        segments=[Segment(float(i), float(i) + 1, "word") for i in range(60_000)],
+        language="en",
+        model="m",
+        engine="fake",
+    )
+    est = estimate_dry_run(
+        _episode(),
+        tx,
+        backend="fake",
+        model=None,
+        max_input_chars=None,
+        providers=_dry_api(),
+    )
+    assert est.chunked is True
+    assert est.input_tokens == estimate_tokens(est.input_chars)
+
+
+def test_split_text_no_pieces_when_empty() -> None:
+    assert _split_text("   ", max_chars=10, overlap_chars=2) == []
+    assert _split_text("", max_chars=10, overlap_chars=2) == []
+
+
+def test_split_text_exhausts_overlap_without_break() -> None:
+    word = "b" * 48
+    assert _split_text("aa " + word, max_chars=50, overlap_chars=6) == ["aa", "aa " + word]
+
+
+def test_estimate_dry_run_contextless_model() -> None:
+    est = estimate_dry_run(
+        _episode(),
+        _transcript(),
+        backend="openrouter",
+        model="openrouter/contextless",
+        max_input_chars=100_000,
+        providers=_dry_api(),
+    )
+    assert est.model_known is True
+    assert est.context_length is None
+    assert est.fits is None
+    assert est.cost_usd is None
