@@ -25,7 +25,7 @@ from podtx.format_cmd import (
     reformat_transcript,
 )
 from podtx.rename_cmd import rename_many_from_title
-from podtx.summarize import summarize_many, summarize_transcript
+from podtx.summarize import SummarizeError, summarize_many, summarize_transcript
 from podtx.rss import FeedParseError, parse_feed, suggest_unique_slug
 
 app = typer.Typer(
@@ -35,6 +35,8 @@ app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,
 )
+auth_app = typer.Typer(help="Manage API keys in macOS Keychain for summarize backends.", no_args_is_help=True)
+app.add_typer(auth_app, name="auth")
 console = Console()
 err_console = Console(stderr=True)
 
@@ -981,22 +983,31 @@ def summarize_cmd(
     backend: str = typer.Option(
         "fake",
         "--backend",
-        help="Summary backend (default: fake — offline extractive, no network; no silent external calls)",
+        help="Summary backend: fake (offline), openrouter, opencode, lmstudio/local (OpenAI-compatible)",
     ),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model id (required for lmstudio/local, default for openrouter/opencode)"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="API key (or env OPENROUTER_API_KEY/OPENCODE_API_KEY, or Keychain via `podtx auth set`)"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Override base URL (e.g. LM Studio custom port)"),
+    timeout: Optional[float] = typer.Option(None, "--timeout", help="Request timeout seconds (default 60)"),
+    temperature: Optional[float] = typer.Option(None, "--temperature", help="LLM temperature (default 0.3)"),
+    max_input_chars: Optional[int] = typer.Option(None, "--max-input-chars", help="Truncate transcript to N chars (default: no truncation)"),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
 ) -> None:
-    """Summarize existing transcript JSON without re-running ASR (offline).
+    """Summarize existing transcript JSON without re-running ASR.
 
     Reads one transcript JSON file, or all JSON files for a feed (`--feed`)
     or the whole library (`--all`), and writes stable sidecar summaries alongside
     each transcript (e.g. `episode.summary.json` / `episode.summary.md` with
-    overview, key points, and optional timestamped quotes). Uses an offline
-    extractive fake backend by default — no network, no external API.
+    overview, key points, and optional timestamped quotes). Default backend is
+    `fake` (offline extractive, no network). Use `openrouter`, `opencode`, or
+    `lmstudio`/`local` for LLM summaries (OpenAI-compatible).
 
     Invocation: `podtx summarize <path/to/episode.json>`, `podtx summarize --feed <slug> [--limit N]`,
     or `podtx summarize --all [--limit N]`. Output sidecars are written to the
     same directory as the transcript JSON unless `--out-dir` is given. Use
     `--format json` (default) and/or `--format md` to choose output format(s).
+
+    API keys: prefer `podtx auth set --backend openrouter|opencode` (Keychain), or env `OPENROUTER_API_KEY`/`OPENCODE_API_KEY`, or `--api-key`.
     """
     modes = sum([json_path is not None, feed is not None, all_feeds])
     if modes != 1:
@@ -1005,16 +1016,43 @@ def summarize_cmd(
         )
         raise typer.Exit(1)
 
-    if backend not in {"fake"}:
-        err_console.print(f"[red]Unknown backend:[/red] {backend} (only 'fake' available; offline, no network)")
+    # Resolve settings for defaults / keychain service/account
+    settings = load_settings(data_dir=data_dir)
+    # Backend validation via summarize module (includes aliases)
+    from podtx.summarize import _SUMMARY_BACKENDS, _ALIAS
+
+    normalized = backend.lower().strip()
+    normalized = _ALIAS.get(normalized, normalized)
+    if normalized not in _SUMMARY_BACKENDS:
+        err_console.print(f"[red]Unknown backend:[/red] {backend} (choose from: {', '.join(sorted(_SUMMARY_BACKENDS))})")
         raise typer.Exit(1)
 
     formats = tuple(format) if format else ("json",)
-    # Validate formats early
     for fmt in formats:
         if fmt.lower().strip() not in {"json", "md"}:
             err_console.print(f"[red]Unsupported format {fmt!r}. Choose from: json, md[/red]")
             raise typer.Exit(1)
+
+    # Resolve summarize opts from settings if not provided via CLI
+    resolved_model = model if model is not None else settings.summarize_model
+    resolved_base = base_url if base_url is not None else settings.summarize_base_url
+    resolved_timeout = timeout if timeout is not None else settings.summarize_timeout
+    resolved_temp = temperature if temperature is not None else settings.summarize_temperature
+    resolved_max = max_input_chars if max_input_chars is not None else settings.summarize_max_input_chars
+    # api_key resolution deferred to summarize module (needs keychain)
+    # Pass settings_api_key/service/account so summarize can fallback to keychain
+    summary_kwargs = dict(
+        backend=backend,
+        model=resolved_model,
+        api_key=api_key,
+        base_url=resolved_base,
+        timeout=resolved_timeout,
+        temperature=resolved_temp,
+        max_input_chars=resolved_max,
+        settings_api_key=settings.summarize_api_key,
+        service=settings.summarize_api_key_service,
+        account=settings.summarize_api_key_account,
+    )
 
     if json_path is not None:
         path = json_path.expanduser()
@@ -1026,20 +1064,19 @@ def summarize_cmd(
                 path,
                 out_dir=out_dir,
                 formats=formats,
-                backend=backend,
+                **summary_kwargs,
             )
         except TranscriptJsonError as exc:
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
-        except ValueError as exc:  # pragma: no cover - unsupported format/backend
-            err_console.print(f"[red]{exc}[/red]")  # pragma: no cover
-            raise typer.Exit(1) from exc  # pragma: no cover
+        except (ValueError, SummarizeError) as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
         if not quiet:
             for p in paths:
                 console.print(f"[green]Wrote[/green] {p}")
         return
 
-    settings = load_settings(data_dir=data_dir)
     transcripts_root = settings.transcripts_dir()
     try:
         targets = discover_transcript_jsons(
@@ -1059,13 +1096,13 @@ def summarize_cmd(
 
     if not quiet:
         scope = "all feeds" if all_feeds else f"feed {feed}"
-        console.print(f"[bold]Summarizing {len(targets)} transcript(s)[/bold] ({scope}, backend: {backend} — offline, no network)")
+        console.print(f"[bold]Summarizing {len(targets)} transcript(s)[/bold] ({scope}, backend: {backend})")
 
     result = summarize_many(
         targets,
         out_dir=out_dir,
         formats=formats,
-        backend=backend,
+        **summary_kwargs,
     )
 
     if not quiet:
@@ -1076,6 +1113,91 @@ def summarize_cmd(
         console.print(f"[bold]Done[/bold]: {result.ok} ok, {result.failed} failed")
 
     if result.failed:
+        raise typer.Exit(1)
+
+
+@auth_app.command("set")
+def auth_set(
+    backend: str = typer.Argument(..., help="Backend: openrouter or opencode"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="API key value (if omitted, prompts securely)"),
+    service: Optional[str] = typer.Option(None, "--service", help="Keychain service name (default: podtx-<backend>)"),
+    account: Optional[str] = typer.Option(None, "--account", help="Keychain account name (default: api-key)"),
+) -> None:
+    """Save API key to macOS Keychain for a summarize backend.
+
+    Example: `podtx auth set openrouter` (prompts for key), or `podtx auth set opencode --api-key sk-...`.
+    Stored under service `podtx-<backend>` and account `api-key` by default. Subsequent `podtx summarize --backend <backend>` will read from Keychain if no --api-key / env key is provided.
+    """
+    b = backend.lower().strip()
+    if b not in {"openrouter", "opencode"}:
+        err_console.print(f"[red]Unknown backend for auth:[/red] {backend} (choose: openrouter, opencode)")
+        raise typer.Exit(1)
+    svc = service or f"podtx-{b}"
+    acct = account or "api-key"
+    secret = api_key
+    if not secret:
+        secret = typer.prompt(f"API key for {b}", hide_input=True)
+        if not secret or not secret.strip():
+            err_console.print("[red]No key provided[/red]")
+            raise typer.Exit(1)
+        secret = secret.strip()
+    from podtx.keychain import save_api_key as _save
+
+    try:
+        _save(svc, acct, secret)
+    except RuntimeError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"[green]Saved[/green] {b} key to Keychain [dim]({svc} / {acct})[/dim]")
+
+
+@auth_app.command("get")
+def auth_get(
+    backend: str = typer.Argument(..., help="Backend: openrouter or opencode"),
+    service: Optional[str] = typer.Option(None, "--service"),
+    account: Optional[str] = typer.Option(None, "--account"),
+) -> None:
+    """Check if API key exists in Keychain (does not print secret)."""
+    b = backend.lower().strip()
+    if b not in {"openrouter", "opencode", "lmstudio", "local"}:
+        err_console.print(f"[red]Unknown backend:[/red] {backend}")
+        raise typer.Exit(1)
+    svc = service or f"podtx-{b}"
+    acct = account or "api-key"
+    from podtx.keychain import get_api_key as _get
+
+    val = _get(svc, acct)
+    if val:
+        console.print(f"[green]Found[/green] {b} key in Keychain [dim]({svc} / {acct})[/dim] (length {len(val)})")
+    else:
+        console.print(f"[dim]No key found for {b} in Keychain ({svc} / {acct})[/dim]")
+        raise typer.Exit(1)
+
+
+@auth_app.command("delete")
+def auth_delete(
+    backend: str = typer.Argument(..., help="Backend: openrouter or opencode"),
+    service: Optional[str] = typer.Option(None, "--service"),
+    account: Optional[str] = typer.Option(None, "--account"),
+) -> None:
+    """Delete API key from Keychain."""
+    b = backend.lower().strip()
+    if b not in {"openrouter", "opencode"}:
+        err_console.print(f"[red]Unknown backend for auth:[/red] {backend} (choose: openrouter, opencode)")
+        raise typer.Exit(1)
+    svc = service or f"podtx-{b}"
+    acct = account or "api-key"
+    from podtx.keychain import delete_api_key as _del
+
+    try:
+        ok = _del(svc, acct)
+    except RuntimeError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    if ok:
+        console.print(f"[green]Deleted[/green] {b} key from Keychain [dim]({svc} / {acct})[/dim]")
+    else:
+        console.print(f"[dim]No key to delete for {b} ({svc} / {acct})[/dim]")
         raise typer.Exit(1)
 
 
