@@ -30,6 +30,12 @@ DEFAULT_META_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_SUMMARIZE_TIMEOUT = 60.0
 DEFAULT_SUMMARIZE_TEMPERATURE = 0.3
 
+# Nuggets defaults
+DEFAULT_NUGGETS_BACKEND = "fake"
+DEFAULT_NUGGETS_TIMEOUT = 120.0
+DEFAULT_NUGGETS_TEMPERATURE = 0.3
+DEFAULT_NUGGETS_MAX_INPUT_CHARS = 100_000
+
 # Diarize defaults
 DEFAULT_DIARIZE_BACKEND = "fake"
 DEFAULT_DIARIZE_TIMEOUT = 120.0
@@ -83,6 +89,16 @@ class Settings:
     summarize_timeout: float = DEFAULT_SUMMARIZE_TIMEOUT
     summarize_temperature: float = DEFAULT_SUMMARIZE_TEMPERATURE
     summarize_max_input_chars: int | None = None
+    # Nuggets
+    nuggets_backend: str = DEFAULT_NUGGETS_BACKEND
+    nuggets_model: str | None = None
+    nuggets_base_url: str | None = None
+    nuggets_api_key: str | None = None
+    nuggets_api_key_service: str | None = None
+    nuggets_api_key_account: str | None = None
+    nuggets_timeout: float = DEFAULT_NUGGETS_TIMEOUT
+    nuggets_temperature: float = DEFAULT_NUGGETS_TEMPERATURE
+    nuggets_max_input_chars: int | None = None
 
     def resolved_model(self) -> str:
         if self.model:
@@ -156,6 +172,15 @@ def load_settings(
     summarize_timeout: float | None = None,
     summarize_temperature: float | None = None,
     summarize_max_input_chars: int | None = None,
+    nuggets_backend: str | None = None,
+    nuggets_model: str | None = None,
+    nuggets_base_url: str | None = None,
+    nuggets_api_key: str | None = None,
+    nuggets_api_key_service: str | None = None,
+    nuggets_api_key_account: str | None = None,
+    nuggets_timeout: float | None = None,
+    nuggets_temperature: float | None = None,
+    nuggets_max_input_chars: int | None = None,
     config_path: Path | None = None,
 ) -> Settings:
     """Resolve settings with precedence: CLI flags > env > TOML > defaults."""
@@ -238,6 +263,26 @@ def load_settings(
     if "summarize_max_input_chars" in toml:
         v = toml["summarize_max_input_chars"]
         settings = replace(settings, summarize_max_input_chars=int(v) if v is not None else None)
+    # Nuggets TOML
+    if "nuggets_backend" in toml:
+        settings = replace(settings, nuggets_backend=str(toml["nuggets_backend"]))
+    if "nuggets_model" in toml:
+        settings = replace(settings, nuggets_model=str(toml["nuggets_model"]))
+    if "nuggets_base_url" in toml:
+        settings = replace(settings, nuggets_base_url=str(toml["nuggets_base_url"]))
+    if "nuggets_api_key" in toml:
+        settings = replace(settings, nuggets_api_key=str(toml["nuggets_api_key"]))
+    if "nuggets_api_key_service" in toml:
+        settings = replace(settings, nuggets_api_key_service=str(toml["nuggets_api_key_service"]))
+    if "nuggets_api_key_account" in toml:
+        settings = replace(settings, nuggets_api_key_account=str(toml["nuggets_api_key_account"]))
+    if "nuggets_timeout" in toml:
+        settings = replace(settings, nuggets_timeout=float(toml["nuggets_timeout"]))
+    if "nuggets_temperature" in toml:
+        settings = replace(settings, nuggets_temperature=float(toml["nuggets_temperature"]))
+    if "nuggets_max_input_chars" in toml:
+        v = toml["nuggets_max_input_chars"]
+        settings = replace(settings, nuggets_max_input_chars=int(v) if v is not None else None)
 
     # Env
     if (v := _env("ENGINE")) is not None:
@@ -337,6 +382,44 @@ def load_settings(
         settings = replace(settings, summarize_base_url=v)
     if (v := os.environ.get("OPENROUTER_BASE_URL")) is not None:
         settings = replace(settings, summarize_base_url=v)
+    # Nuggets env
+    if (v := _env("NUGGETS_BACKEND")) is not None:
+        settings = replace(settings, nuggets_backend=v)
+    if (v := _env("NUGGETS_MODEL")) is not None:
+        settings = replace(settings, nuggets_model=v)
+    if (v := _env("NUGGETS_BASE_URL")) is not None:
+        settings = replace(settings, nuggets_base_url=v)
+    if (v := _env("NUGGETS_API_KEY")) is not None:
+        settings = replace(settings, nuggets_api_key=v)
+    if (v := _env("NUGGETS_API_KEY_SERVICE")) is not None:
+        settings = replace(settings, nuggets_api_key_service=v)
+    if (v := _env("NUGGETS_API_KEY_ACCOUNT")) is not None:
+        settings = replace(settings, nuggets_api_key_account=v)
+    if (v := _env("NUGGETS_TIMEOUT")) is not None:
+        settings = replace(settings, nuggets_timeout=float(v))
+    if (v := _env("NUGGETS_TEMPERATURE")) is not None:
+        settings = replace(settings, nuggets_temperature=float(v))
+    if (v := _env("NUGGETS_MAX_INPUT_CHARS")) is not None:
+        settings = replace(settings, nuggets_max_input_chars=int(v))
+    # Provider-specific nuggets env aliases
+    if (v := os.environ.get("OPENROUTER_API_KEY")) is not None:
+        settings = replace(settings, nuggets_api_key=v)
+    if (v := os.environ.get("OPENCODE_API_KEY")) is not None:
+        settings = replace(settings, nuggets_api_key=v)
+    if (v := os.environ.get("OPENAI_API_KEY")) is not None:
+        settings = replace(settings, nuggets_api_key=v)
+    if (v := os.environ.get("ANTHROPIC_API_KEY")) is not None:
+        settings = replace(settings, nuggets_api_key=v)
+    if (v := os.environ.get("OPENROUTER_BASE_URL")) is not None:
+        settings = replace(settings, nuggets_base_url=v)
+    if (v := os.environ.get("OPENCODE_BASE_URL")) is not None:
+        settings = replace(settings, nuggets_base_url=v)
+    if (v := os.environ.get("LMSTUDIO_BASE_URL")) is not None:
+        settings = replace(settings, nuggets_base_url=v)
+    if (v := os.environ.get("OPENAI_BASE_URL")) is not None:
+        settings = replace(settings, nuggets_base_url=v)
+    if (v := os.environ.get("ANTHROPIC_BASE_URL")) is not None:
+        settings = replace(settings, nuggets_base_url=v)
 
     # CLI flags (only override when explicitly provided)
     if engine is not None:
@@ -406,6 +489,24 @@ def load_settings(
         settings = replace(settings, summarize_temperature=summarize_temperature)
     if summarize_max_input_chars is not None:
         settings = replace(settings, summarize_max_input_chars=summarize_max_input_chars)
+    if nuggets_backend is not None:
+        settings = replace(settings, nuggets_backend=nuggets_backend)
+    if nuggets_model is not None:
+        settings = replace(settings, nuggets_model=nuggets_model)
+    if nuggets_base_url is not None:
+        settings = replace(settings, nuggets_base_url=nuggets_base_url)
+    if nuggets_api_key is not None:
+        settings = replace(settings, nuggets_api_key=nuggets_api_key)
+    if nuggets_api_key_service is not None:
+        settings = replace(settings, nuggets_api_key_service=nuggets_api_key_service)
+    if nuggets_api_key_account is not None:
+        settings = replace(settings, nuggets_api_key_account=nuggets_api_key_account)
+    if nuggets_timeout is not None:
+        settings = replace(settings, nuggets_timeout=nuggets_timeout)
+    if nuggets_temperature is not None:
+        settings = replace(settings, nuggets_temperature=nuggets_temperature)
+    if nuggets_max_input_chars is not None:
+        settings = replace(settings, nuggets_max_input_chars=nuggets_max_input_chars)
 
     return settings
 

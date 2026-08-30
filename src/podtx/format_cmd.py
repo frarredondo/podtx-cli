@@ -89,11 +89,19 @@ def discover_transcript_jsons(
         feed_dir = root / feed
         if not feed_dir.is_dir():
             raise TranscriptJsonError(f"Feed transcript folder not found: {feed}")
-        return sorted(p for p in feed_dir.glob("*.json") if not p.name.endswith(".summary.json"))
+        return sorted(
+            p
+            for p in feed_dir.glob("*.json")
+            if not p.name.endswith((".summary.json", ".nuggets.json"))
+        )
 
     if not root.is_dir():
         return []
-    return sorted(p for p in root.glob("*/*.json") if not p.name.endswith(".summary.json"))
+    return sorted(
+        p
+        for p in root.glob("*/*.json")
+        if not p.name.endswith((".summary.json", ".nuggets.json"))
+    )
 
 
 def _maybe_index_after_reformat(

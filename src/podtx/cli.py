@@ -24,6 +24,14 @@ from podtx.format_cmd import (
     reformat_many,
     reformat_transcript,
 )
+from podtx.nuggets import (
+    NuggetsError,
+    _checked_formats,
+    _valid_backend,
+    extract_nuggets_transcript,
+    nuggets_many,
+)
+from podtx.providers import ProviderError
 from podtx.rename_cmd import rename_many_from_title
 from podtx.summarize import SummarizeError, summarize_many, summarize_transcript
 from podtx.rss import FeedParseError, parse_feed, suggest_unique_slug
@@ -1197,20 +1205,195 @@ def summarize_cmd(
         raise typer.Exit(1)
 
 
+@app.command("nuggets")
+def nuggets_cmd(
+    json_path: Optional[Path] = typer.Argument(
+        None,
+        help="Existing podtx transcript .json file (omit when using --feed / --all)",
+    ),
+    feed: Optional[str] = typer.Option(
+        None,
+        "--feed",
+        help="Extract nuggets from all transcript JSON files for a feed slug",
+    ),
+    all_feeds: bool = typer.Option(
+        False,
+        "--all",
+        help="Extract nuggets from all transcript JSON files in the library",
+    ),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        "-n",
+        help="Max transcripts to process (for --feed / --all)",
+    ),
+    data_dir: Optional[Path] = typer.Option(
+        None, "--data-dir", help="Override data directory (for --feed / --all)"
+    ),
+    out_dir: Optional[Path] = typer.Option(
+        None, "--out-dir", help="Output directory (default: same as transcript JSON)"
+    ),
+    format: Optional[list[str]] = typer.Option(
+        None, "--format", "-f", help="Nuggets output format (repeatable): json, md (default: json)"
+    ),
+    backend: str = typer.Option(
+        "fake",
+        "--backend",
+        help="Nuggets backend: fake (offline), openrouter, opencode, openai, anthropic, lmstudio/local",
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="Alias for --backend"
+    ),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Model id (required for openai/anthropic/lmstudio; default for openrouter/opencode)"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="API key (or env OPENROUTER_API_KEY/OPENCODE_API_KEY/OPENAI_API_KEY/ANTHROPIC_API_KEY, or Keychain via `podtx auth set`)"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Override base URL (e.g. LM Studio custom port)"),
+    timeout: Optional[float] = typer.Option(None, "--timeout", help="Request timeout seconds (default 120)"),
+    temperature: Optional[float] = typer.Option(None, "--temperature", help="LLM temperature (default 0.3)"),
+    max_input_chars: Optional[int] = typer.Option(None, "--max-input-chars", help="Chunk transcript at N chars, split on segment boundaries with overlap (default: 100000)"),
+    force: bool = typer.Option(False, "--force", help="Re-extract even when a fresh sidecar exists"),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+) -> None:
+    """Extract durable insights ("nuggets") from existing transcript JSON.
+
+    Reads one transcript JSON file, or all JSON files for a feed (`--feed`)
+    or the whole library (`--all`), applies a versioned scored rubric, and
+    writes stable sidecars alongside each transcript (e.g. `episode.nuggets.json`
+    / `episode.nuggets.md`). Every quote is mechanically verified against the
+    transcript and cited with a `[hh:mm:ss]` timestamp resolved from segments.
+
+    Default backend is `fake` (offline extractive, no network). Use
+    `openrouter`, `opencode`, `openai`, `anthropic`, or `lmstudio`/`local`
+    for LLM extraction (OpenAI-compatible / Anthropic) — always opt-in.
+
+    Re-runs skip episodes whose sidecar matches the current rubric +
+    backend + model; use `--force` to re-extract.
+
+    API keys: prefer `podtx auth set --backend openrouter|opencode|openai|anthropic`
+    (Keychain), or env `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` /
+    `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or `--api-key`.
+    """
+    effective_backend = provider if provider is not None else backend
+    modes = sum([json_path is not None, feed is not None, all_feeds])
+    if modes != 1:
+        err_console.print(
+            "[red]Specify exactly one of:[/red] a JSON path, `--feed <slug>`, or `--all`"
+        )
+        raise typer.Exit(1)
+
+    settings = load_settings(data_dir=data_dir)
+
+    try:
+        effective_backend = _valid_backend(effective_backend)
+    except NuggetsError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    formats = tuple(format) if format else ("json",)
+    try:
+        formats = _checked_formats(formats)
+    except NuggetsError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    resolved_model = model if model is not None else settings.nuggets_model
+    resolved_base = base_url if base_url is not None else settings.nuggets_base_url
+    resolved_timeout = timeout if timeout is not None else settings.nuggets_timeout
+    resolved_temp = temperature if temperature is not None else settings.nuggets_temperature
+    resolved_max = max_input_chars if max_input_chars is not None else settings.nuggets_max_input_chars
+    nuggets_kwargs = dict(
+        backend=effective_backend,
+        model=resolved_model,
+        api_key=api_key,
+        base_url=resolved_base,
+        timeout=resolved_timeout,
+        temperature=resolved_temp,
+        max_input_chars=resolved_max,
+        force=force,
+        settings_api_key=settings.nuggets_api_key,
+        service=settings.nuggets_api_key_service,
+        account=settings.nuggets_api_key_account,
+    )
+
+    if json_path is not None:
+        path = json_path.expanduser()
+        if not path.is_file():
+            err_console.print(f"[red]File not found:[/red] {path}")
+            raise typer.Exit(1)
+        try:
+            run = extract_nuggets_transcript(
+                path,
+                out_dir=out_dir,
+                formats=formats,
+                **nuggets_kwargs,
+            )
+        except TranscriptJsonError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        except (ValueError, NuggetsError, ProviderError) as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        if run.skipped:
+            if not quiet:
+                console.print(f"[dim]Skipping[/dim] {path} (fresh sidecar for current rubric/backend/model)")
+            return
+        if not quiet:
+            for p in run.written:
+                console.print(f"[green]Wrote[/green] {p}")
+        return
+
+    transcripts_root = settings.transcripts_dir()
+    try:
+        targets = discover_transcript_jsons(
+            transcripts_root,
+            feed=None if all_feeds else feed,
+        )
+    except TranscriptJsonError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if not targets:
+        err_console.print("[dim]No transcript JSON files found.[/dim]")
+        raise typer.Exit(1)
+
+    if limit is not None:
+        targets = targets[:limit]
+
+    if not quiet:
+        scope = "all feeds" if all_feeds else f"feed {feed}"
+        console.print(f"[bold]Extracting nuggets from {len(targets)} transcript(s)[/bold] ({scope}, backend: {effective_backend})")
+
+    result = nuggets_many(
+        targets,
+        out_dir=out_dir,
+        formats=formats,
+        **nuggets_kwargs,
+    )
+
+    if not quiet:
+        for p in result.written:
+            console.print(f"[green]Wrote[/green] {p}")
+        for path, message in result.errors:
+            err_console.print(f"[red]Failed[/red] {path}: {message}")
+        console.print(f"[bold]Done[/bold]: {result.ok} ok, {result.skipped} skipped, {result.failed} failed")
+
+    if result.failed:
+        raise typer.Exit(1)
+
+
 @auth_app.command("set")
 def auth_set(
-    backend: str = typer.Argument(..., help="Backend: openrouter or opencode"),
+    backend: str = typer.Argument(..., help="Backend: openrouter, opencode, anthropic, openai"),
     api_key: Optional[str] = typer.Option(None, "--api-key", help="API key value (if omitted, prompts securely)"),
     service: Optional[str] = typer.Option(None, "--service", help="Keychain service name (default: podtx-<backend>)"),
     account: Optional[str] = typer.Option(None, "--account", help="Keychain account name (default: api-key)"),
 ) -> None:
-    """Save API key to macOS Keychain for a summarize backend.
+    """Save API key to macOS Keychain for a summarize/nuggets backend.
 
     Example: `podtx auth set openrouter` (prompts for key), or `podtx auth set opencode --api-key sk-...`.
-    Stored under service `podtx-<backend>` and account `api-key` by default. Subsequent `podtx summarize --backend <backend>` will read from Keychain if no --api-key / env key is provided.
+    Stored under service `podtx-<backend>` and account `api-key` by default. Subsequent `podtx summarize --backend <backend>` / `podtx nuggets --backend <backend>` will read from Keychain if no --api-key / env key is provided.
     """
     b = backend.lower().strip()
-    if b not in {"openrouter", "opencode"}:
+    if b not in {"openrouter", "opencode", "anthropic", "openai"}:
         err_console.print(f"[red]Unknown backend for auth:[/red] {backend} (choose: openrouter, opencode)")
         raise typer.Exit(1)
     svc = service or f"podtx-{b}"
@@ -1255,13 +1438,13 @@ def auth_set(
 
 @auth_app.command("get")
 def auth_get(
-    backend: str = typer.Argument(..., help="Backend: openrouter or opencode"),
+    backend: str = typer.Argument(..., help="Backend: openrouter, opencode, anthropic, openai, lmstudio"),
     service: Optional[str] = typer.Option(None, "--service"),
     account: Optional[str] = typer.Option(None, "--account"),
 ) -> None:
     """Check if API key exists in Keychain (does not print secret)."""
     b = backend.lower().strip()
-    if b not in {"openrouter", "opencode", "lmstudio", "local"}:
+    if b not in {"openrouter", "opencode", "lmstudio", "local", "anthropic", "openai"}:
         err_console.print(f"[red]Unknown backend:[/red] {backend}")
         raise typer.Exit(1)
     svc = service or f"podtx-{b}"
@@ -1278,13 +1461,13 @@ def auth_get(
 
 @auth_app.command("delete")
 def auth_delete(
-    backend: str = typer.Argument(..., help="Backend: openrouter or opencode"),
+    backend: str = typer.Argument(..., help="Backend: openrouter, opencode, anthropic, openai"),
     service: Optional[str] = typer.Option(None, "--service"),
     account: Optional[str] = typer.Option(None, "--account"),
 ) -> None:
     """Delete API key from Keychain."""
     b = backend.lower().strip()
-    if b not in {"openrouter", "opencode"}:
+    if b not in {"openrouter", "opencode", "anthropic", "openai"}:
         err_console.print(f"[red]Unknown backend for auth:[/red] {backend} (choose: openrouter, opencode)")
         raise typer.Exit(1)
     svc = service or f"podtx-{b}"
