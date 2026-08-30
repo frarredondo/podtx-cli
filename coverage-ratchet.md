@@ -2,12 +2,12 @@
 
 Whole package (`podtx`) on this PR branch — **not** Codecov patch / diff coverage.
 
-`statements=91.37% (min 65%) | branches=86.08% (min 45%) | combined=89.90% (informational)`
+`statements=92.09% (min 65%) | branches=87.18% (min 45%) | combined=90.74% (informational)`
 
 | Metric | Value | Role |
 |--------|------:|------|
-| Statements | 91.37% | Gated (min 65%) |
-| Branches | 86.08% | Gated (min 45%) |
-| Combined | 89.90% | Informational |
+| Statements | 92.09% | Gated (min 65%) |
+| Branches | 87.18% | Gated (min 45%) |
+| Combined | 90.74% | Informational |
 
 **Status:** passed

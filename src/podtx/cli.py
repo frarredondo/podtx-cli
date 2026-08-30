@@ -21,17 +21,29 @@ from podtx.pipeline import process_episodes, select_episodes_for_sync, transcrib
 from podtx.format_cmd import (
     TranscriptJsonError,
     discover_transcript_jsons,
+    load_transcript_json,
     reformat_many,
     reformat_transcript,
 )
 from podtx.nuggets import (
+    DryRunEstimate,
     NuggetsError,
     _checked_formats,
     _valid_backend,
+    estimate_dry_run,
     extract_nuggets_transcript,
     nuggets_many,
 )
-from podtx.providers import ProviderError
+from podtx.providers import (
+    CatalogError,
+    ModelInfo,
+    ProviderError,
+    available_providers,
+    catalog_providers,
+    get_model,
+    list_models,
+    load_catalog,
+)
 from podtx.rename_cmd import rename_many_from_title
 from podtx.summarize import SummarizeError, summarize_many, summarize_transcript
 from podtx.rss import FeedParseError, parse_feed, suggest_unique_slug
@@ -1251,6 +1263,11 @@ def nuggets_cmd(
     temperature: Optional[float] = typer.Option(None, "--temperature", help="LLM temperature (default 0.3)"),
     max_input_chars: Optional[int] = typer.Option(None, "--max-input-chars", help="Chunk transcript at N chars, split on segment boundaries with overlap (default: 100000)"),
     force: bool = typer.Option(False, "--force", help="Re-extract even when a fresh sidecar exists"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Estimate tokens and cost from the models.dev catalog without calling any backend or writing files",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
 ) -> None:
     """Extract durable insights ("nuggets") from existing transcript JSON.
@@ -1313,6 +1330,21 @@ def nuggets_cmd(
         service=settings.nuggets_api_key_service,
         account=settings.nuggets_api_key_account,
     )
+
+    if dry_run:
+        _run_nuggets_dry_run(
+            json_path=json_path,
+            feed=feed,
+            all_feeds=all_feeds,
+            limit=limit,
+            transcripts_root=settings.transcripts_dir(),
+            data_dir=settings.data_dir,
+            backend=effective_backend,
+            model=resolved_model,
+            max_input_chars=resolved_max,
+            quiet=quiet,
+        )
+        return
 
     if json_path is not None:
         path = json_path.expanduser()
@@ -1378,6 +1410,264 @@ def nuggets_cmd(
 
     if result.failed:
         raise typer.Exit(1)
+
+
+def _fmt_integer(value: int | None) -> str:
+    return f"{value:,}" if value is not None else "—"
+
+
+def _fmt_money(value: float | None) -> str:
+    return f"${value:.2f}" if value is not None else "—"
+
+
+def _print_dry_run(
+    path: Path,
+    episode: Episode,
+    transcript: Transcript,
+    *,
+    backend: str,
+    model: str | None,
+    max_input_chars: int,
+    raw: dict | None,
+) -> DryRunEstimate:
+    est = estimate_dry_run(
+        episode,
+        transcript,
+        backend=backend,
+        model=model,
+        max_input_chars=max_input_chars,
+        providers=raw or {},
+    )
+    console.print(
+        f"[bold]Dry run[/bold]: {path} — {episode.title if episode else path.stem}"
+    )
+    console.print(
+        f"  input: {est.input_chars:,} chars -> {est.input_tokens:,} tokens"
+        f" | output est: {est.output_tokens:,} tokens"
+        f" | total: {est.total_tokens:,} tokens"
+    )
+    if est.chunked:
+        console.print(f"  plan: {est.chunk_count} chunks (over max-input-chars)")
+    else:
+        console.print("  plan: single pass")
+    if backend == "fake":
+        console.print("  backend fake: no inference call expected - token estimate only")
+        return est
+    if est.model_known:
+        info = get_model(raw or {}, backend, model or "")
+        console.print(f"  model: {model} ({info.name})")
+        if est.cost_known:
+            console.print(f"  cost: ${est.cost_usd:,.6f}")
+        else:
+            console.print("  cost: unknown (no pricing in catalog)")
+    elif raw is not None:
+        console.print(f"  cost: unknown (model '{model}' not in catalog)")
+    else:
+        console.print("  cost: unknown (catalog unavailable)")
+    return est
+
+
+def _run_nuggets_dry_run(
+    *,
+    json_path: Optional[Path],
+    feed: Optional[str],
+    all_feeds: bool,
+    limit: Optional[int],
+    transcripts_root: Path,
+    data_dir: Path,
+    backend: str,
+    model: str | None,
+    max_input_chars: int,
+    quiet: bool,
+) -> None:
+    try:
+        raw = load_catalog(data_dir)
+    except CatalogError:
+        raw = None
+    if json_path is not None:
+        path = json_path.expanduser()
+        if not path.is_file():
+            err_console.print(f"[red]File not found:[/red] {path}")
+            raise typer.Exit(1)
+        try:
+            episode, transcript = load_transcript_json(path)
+        except TranscriptJsonError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        _print_dry_run(
+            path,
+            episode,
+            transcript,
+            backend=backend,
+            model=model,
+            max_input_chars=max_input_chars,
+            raw=raw,
+        )
+        return
+
+    try:
+        targets = discover_transcript_jsons(
+            transcripts_root,
+            feed=None if all_feeds else feed,
+        )
+    except TranscriptJsonError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    if not targets:
+        err_console.print("[dim]No transcript JSON files found.[/dim]")
+        raise typer.Exit(1)
+
+    if limit is not None:
+        targets = targets[:limit]
+
+    total_tokens = 0
+    total_cost = 0.0
+    costed = 0
+    ok = 0
+    for target in targets:
+        try:
+            episode, transcript = load_transcript_json(target)
+        except TranscriptJsonError as exc:
+            err_console.print(f"[red]Skipping[/red] {target}: {exc}")
+            continue
+        est = _print_dry_run(
+            target,
+            episode,
+            transcript,
+            backend=backend,
+            model=model,
+            max_input_chars=max_input_chars,
+            raw=raw,
+        )
+        ok += 1
+        total_tokens += est.total_tokens
+        if est.cost_known:
+            costed += 1
+            total_cost += est.cost_usd
+    if not quiet:
+        console.print(
+            f"[bold]TOTAL[/bold]: {ok} episodes, {total_tokens:,} tokens, "
+            f"${total_cost:,.6f} ({costed}/{ok} costed)"
+        )
+    if ok != len(targets):
+        raise typer.Exit(1)
+
+
+def _show_provider_counts(raw: dict) -> None:
+    supported = sorted(set(available_providers()) & set(catalog_providers(raw)))
+    if not supported:
+        console.print("[dim]No configured providers found in the models.dev catalog.[/dim]")
+        return
+    table = Table(title="models.dev catalog - configured providers")
+    table.add_column("Provider")
+    table.add_column("Name")
+    table.add_column("Models")
+    for pid in supported:
+        entry = raw[pid]
+        table.add_row(
+            pid,
+            entry.get("name", pid),
+            str(len(list_models(raw, pid))),
+        )
+    console.print(table)
+
+
+def _show_provider_models(raw: dict, *, provider: str, limit: Optional[int]) -> None:
+    rows = list_models(raw, provider)
+    if not rows:
+        err_console.print(f"[red]Provider {provider!r} has no models in the models.dev catalog.[/red]")
+        raise typer.Exit(1)
+    if limit is not None:
+        rows = rows[:limit]
+    table = Table(title=f"models.dev catalog - {provider}")
+    table.add_column("Model")
+    table.add_column("Context")
+    table.add_column("$/M in")
+    table.add_column("$/M out")
+    for model in rows:
+        table.add_row(
+            model.name,
+            _fmt_integer(model.context_length),
+            _fmt_money(model.cost_input_per_million),
+            _fmt_money(model.cost_output_per_million),
+        )
+    console.print(table)
+
+
+def _show_models(raw: dict, *, provider: Optional[str], model_id: str) -> None:
+    matches: list[tuple[str, ModelInfo]] = []
+    if provider is not None:
+        info = get_model(raw, provider, model_id)
+        if info is not None:
+            matches.append((provider, info))
+    else:
+        for pid in catalog_providers(raw):
+            info = get_model(raw, pid, model_id)
+            if info is not None:
+                matches.append((pid, info))
+    if not matches:
+        where = f" for provider {provider!r}" if provider is not None else ""
+        err_console.print(f"[red]Model {model_id!r} is not in the models.dev catalog{where}.[/red]")
+        raise typer.Exit(1)
+    table = Table(title=f"models.dev catalog - {model_id}")
+    table.add_column("Provider")
+    table.add_column("Model")
+    table.add_column("Context")
+    table.add_column("$/M in")
+    table.add_column("$/M out")
+    for pid, model in matches:
+        table.add_row(
+            pid,
+            model.name,
+            _fmt_integer(model.context_length),
+            _fmt_money(model.cost_input_per_million),
+            _fmt_money(model.cost_output_per_million),
+        )
+    console.print(table)
+
+
+@app.command("models")
+def models_cmd(
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="List models for a single provider id (e.g. openrouter, lmstudio)",
+    ),
+    model_id: Optional[str] = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Show a specific model id (searches all providers when --provider is omitted)",
+    ),
+    limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Cap the number of models listed"),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Re-fetch the models.dev catalog, ignoring the cache"
+    ),
+    data_dir: Optional[Path] = typer.Option(
+        None, "--data-dir", help="Override data directory (models.dev cache location)"
+    ),
+) -> None:
+    """Inspect the models.dev catalog (metadata only, no inference).
+
+    Shows which registered providers exist in the catalog and how many
+    models each exposes, lists a provider's models with context window and
+    USD pricing, or validates a model id (cross-provider search).
+    """
+    settings = load_settings(data_dir=data_dir)
+    try:
+        raw = load_catalog(settings.data_dir, refresh=refresh)
+    except CatalogError as exc:
+        err_console.print(f"[red]Failed to load models.dev catalog:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if model_id is not None:
+        _show_models(raw, provider=provider, model_id=model_id)
+        return
+    if provider is not None:
+        _show_provider_models(raw, provider=provider, limit=limit)
+        return
+    _show_provider_counts(raw)
 
 
 @auth_app.command("set")
