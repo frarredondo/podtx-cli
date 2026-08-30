@@ -21,6 +21,7 @@ ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 @dataclass(frozen=True)
 class ProviderSpec:
     name: str
+    provider_class: type[AnthropicProvider] | type[OpenAICompatibleProvider]
     base_url: str | None
     default_model: str | None
     env_var: str | None
@@ -32,6 +33,7 @@ class ProviderSpec:
 _REGISTRY: dict[str, ProviderSpec] = {
     "openrouter": ProviderSpec(
         name="openrouter",
+        provider_class=OpenAICompatibleProvider,
         base_url=DEFAULT_OPENROUTER_BASE_URL,
         default_model=DEFAULT_OPENROUTER_MODEL,
         env_var="OPENROUTER_API_KEY",
@@ -40,6 +42,7 @@ _REGISTRY: dict[str, ProviderSpec] = {
     ),
     "opencode": ProviderSpec(
         name="opencode",
+        provider_class=OpenAICompatibleProvider,
         base_url=DEFAULT_OPENCODE_BASE_URL,
         default_model=DEFAULT_OPENCODE_MODEL,
         env_var="OPENCODE_API_KEY",
@@ -48,6 +51,7 @@ _REGISTRY: dict[str, ProviderSpec] = {
     ),
     "openai": ProviderSpec(
         name="openai",
+        provider_class=OpenAICompatibleProvider,
         base_url=OPENAI_DEFAULT_BASE_URL,
         default_model=None,
         env_var="OPENAI_API_KEY",
@@ -57,6 +61,7 @@ _REGISTRY: dict[str, ProviderSpec] = {
     ),
     "anthropic": ProviderSpec(
         name="anthropic",
+        provider_class=AnthropicProvider,
         base_url=ANTHROPIC_DEFAULT_BASE_URL,
         default_model=None,
         env_var="ANTHROPIC_API_KEY",
@@ -66,6 +71,7 @@ _REGISTRY: dict[str, ProviderSpec] = {
     ),
     "lmstudio": ProviderSpec(
         name="lmstudio",
+        provider_class=OpenAICompatibleProvider,
         base_url=DEFAULT_LMSTUDIO_BASE_URL,
         default_model=None,
         env_var=None,
@@ -168,6 +174,4 @@ def build_provider(
             f"{key} provider requires an API key (--api-key, env {spec.env_var}, or {hint})"
         )
 
-    if key == "anthropic":
-        return AnthropicProvider(key, resolved_base, resolved_model, resolved_key)
-    return OpenAICompatibleProvider(key, resolved_base, resolved_model, resolved_key)
+    return spec.provider_class(key, resolved_base, resolved_model, resolved_key)

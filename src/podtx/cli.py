@@ -24,7 +24,13 @@ from podtx.format_cmd import (
     reformat_many,
     reformat_transcript,
 )
-from podtx.nuggets import NuggetsError, extract_nuggets_transcript, nuggets_many
+from podtx.nuggets import (
+    NuggetsError,
+    _checked_formats,
+    _valid_backend,
+    extract_nuggets_transcript,
+    nuggets_many,
+)
 from podtx.providers import ProviderError
 from podtx.rename_cmd import rename_many_from_title
 from podtx.summarize import SummarizeError, summarize_many, summarize_transcript
@@ -1275,7 +1281,6 @@ def nuggets_cmd(
         raise typer.Exit(1)
 
     settings = load_settings(data_dir=data_dir)
-    from podtx.nuggets import _valid_backend
 
     try:
         effective_backend = _valid_backend(effective_backend)
@@ -1284,10 +1289,11 @@ def nuggets_cmd(
         raise typer.Exit(1) from exc
 
     formats = tuple(format) if format else ("json",)
-    for fmt in formats:
-        if fmt.lower().strip() not in {"json", "md"}:
-            err_console.print(f"[red]Unsupported format {fmt!r}. Choose from: json, md[/red]")
-            raise typer.Exit(1)
+    try:
+        formats = _checked_formats(formats)
+    except NuggetsError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
 
     resolved_model = model if model is not None else settings.nuggets_model
     resolved_base = base_url if base_url is not None else settings.nuggets_base_url

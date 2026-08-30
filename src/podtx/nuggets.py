@@ -24,6 +24,7 @@ from podtx.models import Episode, Transcript
 from podtx.providers import (
     Provider,
     ProviderError,
+    available_providers,
     build_provider,
     normalize_backend,
     get_spec,
@@ -43,14 +44,21 @@ class NuggetsError(Exception):
 
 def _valid_backend(backend: str) -> str:
     key = normalize_backend(backend)
-    from podtx.providers import available_providers
-
     known = {"fake", *available_providers()}
     if key not in known:
         raise NuggetsError(
             f"Unknown backend {backend!r}. Choose from: {', '.join(sorted(known))}"
         )
     return key
+
+
+def _checked_formats(formats: tuple[str, ...]) -> tuple[str, ...]:
+    """Normalize and validate output formats."""
+    out = tuple(f.lower().strip() for f in formats)
+    for fmt in out:
+        if fmt not in {"json", "md"}:
+            raise NuggetsError(f"Unsupported format {fmt!r}. Choose from: json, md")
+    return out
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -192,12 +200,41 @@ def _demote_quote(nugget: dict) -> dict:
     }
 
 
+def _normalized_text(transcript: Transcript) -> str:
+    """Full transcript text (normalized) aligned with segment boundaries."""
+    segs = [s.text for s in transcript.segments if s.text.strip()]
+    if segs:
+        return _normalize(" ".join(segs))
+    return _normalize(transcript.text)
+
+
+def _locate_quote(nq: str, segs: list, full: str):
+    """Return the segment covering ``nq``, or None.
+
+    Prefers an exact single-segment containment match, then falls back to
+    resolving the normalized character offset of the quote in ``full`` so
+    quotes that cross a segment boundary still get a timestamp.
+    """
+    for seg in segs:
+        ns = _normalize(seg.text)
+        if ns and (nq in ns or ns in nq):
+            return seg
+    idx = full.find(nq)
+    if idx == -1:
+        return None
+    pos = 0
+    for seg in segs:
+        length = len(_normalize(seg.text)) + 1
+        if idx < pos + length:
+            return seg
+        pos += length
+    return None
+
+
 def _verify_quotes(nuggets: list[dict], transcript: Transcript) -> list[dict]:
     """Mechanical anti-hallucination check + segment timestamps."""
-    full = _normalize(
-        transcript.text or " ".join(s.text for s in transcript.segments if s.text.strip())
-    )
     segs = [s for s in transcript.segments if s.text.strip()]
+    full = _normalized_text(transcript)
     verified: list[dict] = []
     for n in nuggets:
         quote = n.get("quote", "").strip()
@@ -208,29 +245,18 @@ def _verify_quotes(nuggets: list[dict], transcript: Transcript) -> list[dict]:
         if not nq or nq not in full:
             verified.append(_demote_quote(n))
             continue
-        start = end = None
-        for seg in segs:
-            ns = _normalize(seg.text)
-            if ns and (nq in ns or ns in nq):
-                start, end = float(seg.start), float(seg.end)
-                break
-        if start is None and len(nq.split()) >= 4:
-            chunk = " ".join(nq.split()[:4])
-            for seg in segs:
-                if chunk in _normalize(seg.text):
-                    start, end = float(seg.start), float(seg.end)
-                    break
-        if start is not None:
-            verified.append(
-                {
-                    **n,
-                    "start": round(start, 3),
-                    "end": round(end, 3),
-                    "timestamp": _format_timestamp(start),
-                }
-            )
-        else:
+        seg = _locate_quote(nq, segs, full)
+        if seg is None:
             verified.append(_demote_quote(n))
+            continue
+        verified.append(
+            {
+                **n,
+                "start": round(float(seg.start), 3),
+                "end": round(float(seg.end), 3),
+                "timestamp": _format_timestamp(seg.start),
+            }
+        )
     return verified
 
 
@@ -264,18 +290,56 @@ def _chunk_segments(
     return chunks
 
 
+def _split_text(text: str, *, max_chars: int, overlap_chars: int) -> list[str]:
+    """Split free text into word-wrapped pieces each within ``max_chars``.
+
+    Used when a transcript has no segments, or a single segment exceeds the
+    input budget, so the model is never given over-budget text.
+    """
+    pieces: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for word in text.split():
+        add = len(word) + 1
+        if cur and cur_len + add > max_chars:
+            pieces.append(" ".join(cur))
+            tail: list[str] = []
+            total = 0
+            for prev in reversed(cur):
+                total += len(prev) + 1
+                if total > overlap_chars:
+                    break
+                tail.append(prev)
+            tail.reverse()
+            cur = tail
+            cur_len = sum(len(w) + 1 for w in cur)
+        cur.append(word)
+        cur_len += add
+    if cur:
+        pieces.append(" ".join(cur))
+    return pieces
+
+
 def _split_chunks(transcript: Transcript, *, max_input_chars: int) -> list[str]:
     text = _transcript_text(transcript)
-    if len(text) <= max_input_chars or not transcript.segments:
+    if len(text) <= max_input_chars:
         return [text]
     overlap = max(1, int(max_input_chars * _OVERLAP_FRACTION))
+    if not transcript.segments:
+        return _split_text(text, max_chars=max_input_chars, overlap_chars=overlap)
     chunks = _chunk_segments(
         transcript, budget_chars=max_input_chars, overlap_chars=overlap
     )
-    return [
-        " ".join(transcript.segments[i].text.strip() for i in idx)
-        for idx in chunks
-    ]
+    pieces: list[str] = []
+    for idx in chunks:
+        joined = " ".join(transcript.segments[i].text.strip() for i in idx)
+        if len(joined) <= max_input_chars:
+            pieces.append(joined)
+        else:
+            pieces.extend(
+                _split_text(joined, max_chars=max_input_chars, overlap_chars=overlap)
+            )
+    return pieces
 
 
 def _transcript_text(transcript: Transcript) -> str:
@@ -431,11 +495,8 @@ def _write_nugget_files(
 ) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for fmt in formats:
-        key = fmt.lower().strip()
-        if key not in {"json", "md"}:
-            raise NuggetsError(f"Unsupported format {fmt!r}. Choose from: json, md")
-        if key == "json":
+    for fmt in _checked_formats(formats):
+        if fmt == "json":
             path = out_dir / f"{basename}.nuggets.json"
             path.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

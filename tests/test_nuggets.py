@@ -19,6 +19,7 @@ from podtx.nuggets import (
     _extract_chunk_with_retry,
     _fake_nuggets,
     _format_timestamp,
+    _locate_quote,
     _merge_nuggets,
     _normalize,
     _nuggets_to_markdown,
@@ -26,6 +27,7 @@ from podtx.nuggets import (
     _rubric_messages,
     _sidecar_fresh,
     _split_chunks,
+    _split_text,
     _transcript_text,
     _valid_backend,
     _validate_payload,
@@ -317,7 +319,7 @@ def test_verify_quotes_chunk_prefix_fallback() -> None:
     assert out[0]["start"] == 0.0
 
 
-def test_verify_quotes_demotes_when_start_unresolved() -> None:
+def test_verify_quotes_timestamps_boundary_crossing() -> None:
     segments = [
         Segment(0.0, 3.0, "one tiny"),
         Segment(3.0, 6.0, "small phrase two"),
@@ -326,11 +328,12 @@ def test_verify_quotes_demotes_when_start_unresolved() -> None:
     tx = Transcript(text=text, segments=segments, language="en", model="m", engine="fake")
     quote = "tiny small"
     out = _verify_quotes([_nugget(quote=quote, scores={"T": 2, "S": 2, "E": 2, "A": 2})], tx)
-    assert out[0]["quote"] == ""
-    assert out[0]["total"] == 7
+    assert out[0]["quote"] == quote
+    assert out[0]["timestamp"] == "00:00"
+    assert out[0]["start"] == 0.0
 
 
-def test_verify_quotes_chunk_search_no_match() -> None:
+def test_verify_quotes_timestamps_offset_fallback() -> None:
     segments = [
         Segment(0.0, 3.0, "one two three four five"),
         Segment(3.0, 6.0, "six seven eight nine ten"),
@@ -339,8 +342,35 @@ def test_verify_quotes_chunk_search_no_match() -> None:
     tx = Transcript(text=text, segments=segments, language="en", model="m", engine="fake")
     quote = "four five six seven"
     out = _verify_quotes([_nugget(quote=quote, scores={"T": 2, "S": 2, "E": 2, "A": 2})], tx)
+    assert out[0]["quote"] == quote
+    assert out[0]["timestamp"] == "00:00"
+    assert out[0]["start"] == 0.0
+
+
+def test_verify_quotes_demotes_without_segments() -> None:
+    tx = Transcript(text="alpha wave", segments=[], language="en", model="m", engine="fake")
+    out = _verify_quotes([_nugget(quote="alpha")], tx)
     assert out[0]["quote"] == ""
-    assert out[0]["total"] == 7
+    assert out[0]["timestamp"] == ""
+
+
+def test_verify_quotes_timestamps_later_segment() -> None:
+    segments = [
+        Segment(0.0, 3.0, "a b c"),
+        Segment(3.0, 6.0, "d e f"),
+        Segment(6.0, 9.0, "g h i"),
+    ]
+    text = "a b c d e f g h i"
+    tx = Transcript(text=text, segments=segments, language="en", model="m", engine="fake")
+    out = _verify_quotes([_nugget(quote="e f g")], tx)
+    assert out[0]["quote"] == "e f g"
+    assert out[0]["timestamp"] == "00:03"
+    assert out[0]["start"] == 3.0
+
+
+def test_locate_quote_no_match_in_full() -> None:
+    segs = [Segment(0.0, 3.0, "one tiny")]
+    assert _locate_quote("totally different", segs, "one tiny") is None
 
 
 def test_chunk_segments_no_segments() -> None:
@@ -352,7 +382,7 @@ def test_split_chunks_single() -> None:
     tx = _transcript()
     assert _split_chunks(tx, max_input_chars=10_000) == [tx.text]
     tx2 = Transcript(text="no segments", segments=[], language="en", model="m", engine="fake")
-    assert _split_chunks(tx2, max_input_chars=2) == ["no segments"]
+    assert _split_chunks(tx2, max_input_chars=2) == ["no", "segments"]
 
 
 def test_split_chunks_multi_with_overlap() -> None:
@@ -382,9 +412,19 @@ def test_chunk_segments_carry_overlap() -> None:
 
 
 def test_split_chunks_oversized_segment() -> None:
-    segments = [Segment(0.0, 1.0, "a very long segment sentence here")]
-    tx = Transcript(text="a very long segment sentence here", segments=segments, language="en", model="m", engine="fake")
-    assert _split_chunks(tx, max_input_chars=3) == ["a very long segment sentence here"]
+    segments = [Segment(0.0, 1.0, "aa bb cc dd ee")]
+    tx = Transcript(text="aa bb cc dd ee", segments=segments, language="en", model="m", engine="fake")
+    pieces = _split_chunks(tx, max_input_chars=4)
+    assert pieces == ["aa", "bb", "cc", "dd", "ee"]
+    assert all(len(p) <= 4 for p in pieces)
+
+
+def test_split_text_carries_overlap() -> None:
+    assert _split_text("aa bb cc dd", max_chars=6, overlap_chars=3) == [
+        "aa bb",
+        "bb cc",
+        "cc dd",
+    ]
 
 
 def test_transcript_text() -> None:

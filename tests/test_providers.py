@@ -190,6 +190,7 @@ def test_build_provider_missing_base_url(monkeypatch) -> None:
         "nobase",
         ProviderSpec(
             name="nobase",
+            provider_class=registry_mod.OpenAICompatibleProvider,
             base_url=None,
             default_model="m",
             env_var=None,
