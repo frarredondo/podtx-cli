@@ -30,6 +30,15 @@ DEFAULT_META_BASE_URL = "https://api.meta.ai/v1"
 DEFAULT_SUMMARIZE_TIMEOUT = 60.0
 DEFAULT_SUMMARIZE_TEMPERATURE = 0.3
 
+# Diarize defaults
+DEFAULT_DIARIZE_BACKEND = "fake"
+DEFAULT_DIARIZE_TIMEOUT = 120.0
+DEFAULT_PYANNOTE_MODEL = "pyannote/speaker-diarization-3.1"
+DEFAULT_HF_MODEL = "pyannote/speaker-diarization-3.1"
+DEFAULT_HF_BASE_URL = "https://api-inference.huggingface.co"
+DEFAULT_ASSEMBLYAI_BASE_URL = "https://api.assemblyai.com"
+DEFAULT_DEEPGRAM_BASE_URL = "https://api.deepgram.com"
+
 
 def default_data_dir() -> Path:
     return Path(user_data_dir(APP_NAME, appauthor=False))
@@ -56,6 +65,14 @@ class Settings:
     correct_names: bool = False
     diarize: bool = False
     trim_start: float = 0.0
+    # Diarize
+    diarize_backend: str = DEFAULT_DIARIZE_BACKEND
+    diarize_model: str | None = None
+    diarize_base_url: str | None = None
+    diarize_api_key: str | None = None
+    diarize_api_key_service: str | None = None
+    diarize_api_key_account: str | None = None
+    diarize_timeout: float = DEFAULT_DIARIZE_TIMEOUT
     # Summarize
     summarize_backend: str = DEFAULT_SUMMARIZE_BACKEND
     summarize_model: str | None = None
@@ -123,6 +140,13 @@ def load_settings(
     correct_names: bool | None = None,
     diarize: bool | None = None,
     trim_start: float | int | None = None,
+    diarize_backend: str | None = None,
+    diarize_model: str | None = None,
+    diarize_base_url: str | None = None,
+    diarize_api_key: str | None = None,
+    diarize_api_key_service: str | None = None,
+    diarize_api_key_account: str | None = None,
+    diarize_timeout: float | None = None,
     summarize_backend: str | None = None,
     summarize_model: str | None = None,
     summarize_base_url: str | None = None,
@@ -172,6 +196,20 @@ def load_settings(
         settings = replace(settings, correct_names=bool(toml["correctNames"]))
     if "diarize" in toml:  # pragma: no cover - TOML tested via existing suite
         settings = replace(settings, diarize=bool(toml["diarize"]))
+    if "diarize_backend" in toml:
+        settings = replace(settings, diarize_backend=str(toml["diarize_backend"]))
+    if "diarize_model" in toml:
+        settings = replace(settings, diarize_model=str(toml["diarize_model"]))
+    if "diarize_base_url" in toml:
+        settings = replace(settings, diarize_base_url=str(toml["diarize_base_url"]))
+    if "diarize_api_key" in toml:
+        settings = replace(settings, diarize_api_key=str(toml["diarize_api_key"]))
+    if "diarize_api_key_service" in toml:
+        settings = replace(settings, diarize_api_key_service=str(toml["diarize_api_key_service"]))
+    if "diarize_api_key_account" in toml:
+        settings = replace(settings, diarize_api_key_account=str(toml["diarize_api_key_account"]))
+    if "diarize_timeout" in toml:
+        settings = replace(settings, diarize_timeout=float(toml["diarize_timeout"]))
     if "trim_start" in toml:  # pragma: no cover - error branches, valid path tested via TOML test
         try:
             ts = float(toml["trim_start"])
@@ -232,6 +270,33 @@ def load_settings(
         settings = replace(settings, correct_names=v.lower() in {"1", "true", "yes", "on"})
     if (v := _env("DIARIZE")) is not None:  # pragma: no cover - env already tested via existing suite
         settings = replace(settings, diarize=v.lower() in {"1", "true", "yes", "on"})
+    if (v := _env("DIARIZE_BACKEND")) is not None:
+        settings = replace(settings, diarize_backend=v)
+    if (v := _env("DIARIZE_MODEL")) is not None:
+        settings = replace(settings, diarize_model=v)
+    if (v := _env("DIARIZE_BASE_URL")) is not None:
+        settings = replace(settings, diarize_base_url=v)
+    if (v := _env("DIARIZE_API_KEY")) is not None:
+        settings = replace(settings, diarize_api_key=v)
+    if (v := _env("DIARIZE_API_KEY_SERVICE")) is not None:
+        settings = replace(settings, diarize_api_key_service=v)
+    if (v := _env("DIARIZE_API_KEY_ACCOUNT")) is not None:
+        settings = replace(settings, diarize_api_key_account=v)
+    if (v := _env("DIARIZE_TIMEOUT")) is not None:
+        settings = replace(settings, diarize_timeout=float(v))
+    # Provider-specific diarize env aliases
+    if (v := os.environ.get("HF_TOKEN")) is not None:
+        settings = replace(settings, diarize_api_key=v)
+    if (v := os.environ.get("HUGGINGFACE_API_KEY")) is not None:
+        settings = replace(settings, diarize_api_key=v)
+    if (v := os.environ.get("ASSEMBLYAI_API_KEY")) is not None:
+        settings = replace(settings, diarize_api_key=v)
+    if (v := os.environ.get("DEEPGRAM_API_KEY")) is not None:
+        settings = replace(settings, diarize_api_key=v)
+    if (v := os.environ.get("HF_BASE_URL")) is not None:
+        settings = replace(settings, diarize_base_url=v)
+    if (v := os.environ.get("ASSEMBLYAI_BASE_URL")) is not None:
+        settings = replace(settings, diarize_base_url=v)
     if (v := _env("TRIM_START")) is not None:  # pragma: no cover - error branches, happy path tested via env test
         try:
             ts_env = float(v)
@@ -304,6 +369,20 @@ def load_settings(
         settings = replace(settings, correct_names=correct_names)
     if diarize is not None:  # pragma: no cover - CLI tested via CliRunner
         settings = replace(settings, diarize=diarize)
+    if diarize_backend is not None:
+        settings = replace(settings, diarize_backend=diarize_backend)
+    if diarize_model is not None:
+        settings = replace(settings, diarize_model=diarize_model)
+    if diarize_base_url is not None:
+        settings = replace(settings, diarize_base_url=diarize_base_url)
+    if diarize_api_key is not None:
+        settings = replace(settings, diarize_api_key=diarize_api_key)
+    if diarize_api_key_service is not None:
+        settings = replace(settings, diarize_api_key_service=diarize_api_key_service)
+    if diarize_api_key_account is not None:
+        settings = replace(settings, diarize_api_key_account=diarize_api_key_account)
+    if diarize_timeout is not None:
+        settings = replace(settings, diarize_timeout=diarize_timeout)
     if trim_start is not None:  # pragma: no cover - error branch, happy path tested via CLI flag test
         ts_cli = float(trim_start)
         if ts_cli < 0:  # pragma: no cover
