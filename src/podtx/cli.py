@@ -56,6 +56,13 @@ def _settings_from_opts(
     cleanup: Optional[bool] = None,
     correct_names: Optional[bool] = None,
     diarize: Optional[bool] = None,
+    diarize_backend: Optional[str] = None,
+    diarize_model: Optional[str] = None,
+    diarize_base_url: Optional[str] = None,
+    diarize_api_key: Optional[str] = None,
+    diarize_api_key_service: Optional[str] = None,
+    diarize_api_key_account: Optional[str] = None,
+    diarize_timeout: Optional[float] = None,
     trim_start: Optional[float] = None,
 ) -> Settings:
     return load_settings(
@@ -72,6 +79,13 @@ def _settings_from_opts(
         cleanup=cleanup,
         correct_names=correct_names,
         diarize=diarize,
+        diarize_backend=diarize_backend,
+        diarize_model=diarize_model,
+        diarize_base_url=diarize_base_url,
+        diarize_api_key=diarize_api_key,
+        diarize_api_key_service=diarize_api_key_service,
+        diarize_api_key_account=diarize_api_key_account,
+        diarize_timeout=diarize_timeout,
         trim_start=trim_start,
     )
 
@@ -508,6 +522,23 @@ def sync_feeds(
         "--diarize",
         help="Speaker diarization: label segments with SPEAKER_00/01 + reflect turns in text. Opt-in; off by default (single-speaker unchanged). Performance/memory impact: local, CPU-bound.",
     ),
+    diarize_backend: Optional[str] = typer.Option(
+        None,
+        "--diarize-backend",
+        help="Diarization backend: fake (round-robin), pyannote (local), hf, assemblyai, deepgram (default: fake)",
+    ),
+    diarize_model: Optional[str] = typer.Option(
+        None, "--diarize-model", help="Diarization model id (default for pyannote/hf: pyannote/speaker-diarization-3.1)",
+    ),
+    diarize_api_key: Optional[str] = typer.Option(
+        None, "--diarize-api-key", help="API key for diarize backend (or env HF_TOKEN/ASSEMBLYAI_API_KEY, or Keychain via `podtx auth set`)",
+    ),
+    diarize_base_url: Optional[str] = typer.Option(
+        None, "--diarize-base-url", help="Override base URL for diarize backend",
+    ),
+    diarize_timeout: Optional[float] = typer.Option(
+        None, "--diarize-timeout", help="Diarization request timeout seconds (default 120)",
+    ),
     trim_start: Optional[float] = typer.Option(
         None,
         "--trim-start",
@@ -535,6 +566,11 @@ def sync_feeds(
         cleanup=True if cleanup else None,
         correct_names=True if correct_names else None,
         diarize=True if diarize else None,
+        diarize_backend=diarize_backend,
+        diarize_model=diarize_model,
+        diarize_base_url=diarize_base_url,
+        diarize_api_key=diarize_api_key,
+        diarize_timeout=diarize_timeout,
         trim_start=trim_start,
     )
     settings = replace(
@@ -661,6 +697,23 @@ def transcribe_cmd(
         "--diarize",
         help="Speaker diarization: label segments with SPEAKER_00/01 + reflect turns in text. Opt-in; off by default.",
     ),
+    diarize_backend: Optional[str] = typer.Option(
+        None,
+        "--diarize-backend",
+        help="Diarization backend: fake (round-robin), pyannote (local), hf, assemblyai, deepgram (default: fake)",
+    ),
+    diarize_model: Optional[str] = typer.Option(
+        None, "--diarize-model", help="Diarization model id (default for pyannote/hf: pyannote/speaker-diarization-3.1)",
+    ),
+    diarize_api_key: Optional[str] = typer.Option(
+        None, "--diarize-api-key", help="API key for diarize backend (or env HF_TOKEN/ASSEMBLYAI_API_KEY, or Keychain)",
+    ),
+    diarize_base_url: Optional[str] = typer.Option(
+        None, "--diarize-base-url", help="Override base URL for diarize backend",
+    ),
+    diarize_timeout: Optional[float] = typer.Option(
+        None, "--diarize-timeout", help="Diarization request timeout seconds (default 120)",
+    ),
     trim_start: Optional[float] = typer.Option(
         None,
         "--trim-start",
@@ -688,6 +741,11 @@ def transcribe_cmd(
         cleanup=True if cleanup else None,
         correct_names=True if correct_names else None,
         diarize=True if diarize else None,
+        diarize_backend=diarize_backend,
+        diarize_model=diarize_model,
+        diarize_base_url=diarize_base_url,
+        diarize_api_key=diarize_api_key,
+        diarize_timeout=diarize_timeout,
         trim_start=trim_start,
     )
     settings = replace(

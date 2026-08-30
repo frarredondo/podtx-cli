@@ -139,6 +139,23 @@ def transcribe_local_file(
         local_attention_context_size=settings.local_attention_context_size,
     )
     transcript = trim_transcript(transcript, trim_start=settings.trim_start)
+    # Real diarization backends (pyannote/hf/etc.) — fake is handled inside engine round-robin
+    if settings.diarize and settings.diarize_backend != "fake":
+        from podtx.diarize import diarize_transcript as _diarize_transcript
+
+        _log(settings, f"[cyan]Diarizing[/cyan] {ep.title} with {settings.diarize_backend}/{settings.diarize_model or 'default'}")
+        transcript = _diarize_transcript(
+            transcript,
+            audio_path=wav,
+            backend=settings.diarize_backend,
+            model=settings.diarize_model,
+            api_key=settings.diarize_api_key,
+            base_url=settings.diarize_base_url,
+            timeout=settings.diarize_timeout,
+            settings_api_key=settings.diarize_api_key,
+            service=settings.diarize_api_key_service,
+            account=settings.diarize_api_key_account,
+        )
     basename = unique_basename(ep, existing=set())
     paths = write_outputs(
         out_dir=dest_dir,
@@ -252,6 +269,22 @@ def process_episodes(
                     local_attention_context_size=settings.local_attention_context_size,
                 )
                 transcript = trim_transcript(transcript, trim_start=settings.trim_start)
+                if settings.diarize and settings.diarize_backend != "fake":
+                    from podtx.diarize import diarize_transcript as _diarize_transcript
+
+                    _log(settings, f"[cyan]Diarizing[/cyan] {episode.title} with {settings.diarize_backend}/{settings.diarize_model or 'default'}")
+                    transcript = _diarize_transcript(
+                        transcript,
+                        audio_path=wav,
+                        backend=settings.diarize_backend,
+                        model=settings.diarize_model,
+                        api_key=settings.diarize_api_key,
+                        base_url=settings.diarize_base_url,
+                        timeout=settings.diarize_timeout,
+                        settings_api_key=settings.diarize_api_key,
+                        service=settings.diarize_api_key_service,
+                        account=settings.diarize_api_key_account,
+                    )
                 basename = unique_basename(episode, existing_bases)
                 existing_bases.add(basename)
                 paths = write_outputs(
