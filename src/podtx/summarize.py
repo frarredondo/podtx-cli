@@ -234,7 +234,10 @@ def _call_openai_compatible(
     try:
         data = resp.json()
     except Exception as exc:
-        raise SummarizeError(f"LLM returned invalid JSON response: {resp.text[:500]!r}") from exc
+        # Include status code and hint about base-url
+        body_preview = resp.text[:500].strip()
+        hint = " (check --base-url, expected OpenAI-compatible /chat/completions)" if "Not Found" in body_preview else ""
+        raise SummarizeError(f"LLM returned invalid JSON response (HTTP {resp.status_code}): {body_preview!r}{hint}") from exc
     try:
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
