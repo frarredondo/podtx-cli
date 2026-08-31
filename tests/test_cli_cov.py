@@ -259,15 +259,17 @@ def test_sync_feed_arg_found_and_not_found(tmp_path: Path, monkeypatch) -> None:
     assert "not found" in (missing.stdout + missing.stderr).lower()
 
 
-def test_sync_no_feeds_registered(tmp_path: Path) -> None:
+def test_sync_no_feeds_registered(tmp_path: Path, monkeypatch) -> None:
     Database(load_settings(data_dir=tmp_path).state_db_path()).close()
+    monkeypatch.setattr("podtx.cli.require_ffmpeg", lambda: None)
     result = runner.invoke(app, ["sync", "--data-dir", str(tmp_path)])
     assert result.exit_code == 1
     assert "No feeds registered" in (result.stdout + result.stderr)
 
 
-def test_sync_unknown_engine(tmp_path: Path) -> None:
+def test_sync_unknown_engine(tmp_path: Path, monkeypatch) -> None:
     _seed_feed(tmp_path)
+    monkeypatch.setattr("podtx.cli.require_ffmpeg", lambda: None)
     result = runner.invoke(
         app, ["sync", "--engine", "bogus-engine", "--data-dir", str(tmp_path)]
     )
@@ -313,7 +315,8 @@ def test_transcribe_local_file(tmp_path: Path, monkeypatch) -> None:
     assert "Wrote" in result.stdout
 
 
-def test_transcribe_not_file_or_url(tmp_path: Path) -> None:
+def test_transcribe_not_file_or_url(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("podtx.cli.require_ffmpeg", lambda: None)
     result = runner.invoke(app, ["transcribe", "not-a-file-or-url"])
     assert result.exit_code == 1
     assert "Not a file or URL" in (result.stdout + result.stderr)
