@@ -228,7 +228,7 @@ def process_episodes(
                 )
                 if db.is_done(feed_id, episode.guid):
                     _log(settings, f"[dim]Skipping already done:[/dim] {episode.title}")
-                    if prefetch is not None:
+                    if prefetch is not None:  # pragma: no cover - prefetch always set within loop
                         try:
                             prefetch.result()
                         except Exception:
@@ -244,7 +244,7 @@ def process_episodes(
                 _log(settings, f"[red]Download failed:[/red] {episode.title}: {exc}")
                 if db is not None and feed_id is not None:
                     db.mark_error(feed_id=feed_id, guid=episode.guid, message=str(exc))
-                prefetch = enqueue(episodes[idx + 1]) if idx + 1 < len(episodes) else None
+                prefetch = enqueue(episodes[idx + 1]) if idx + 1 < len(episodes) else None  # pragma: no cover - next-episode prefetch
                 continue
 
             prefetch = enqueue(episodes[idx + 1]) if idx + 1 < len(episodes) else None

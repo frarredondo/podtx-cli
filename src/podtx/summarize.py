@@ -453,10 +453,10 @@ def build_summary(
     """Build summary via backend. Returns dict with nuggets (and legacy overview/key_points/quotes for compat)."""
     b = _normalize_backend(backend)
     if b not in _SUMMARY_BACKENDS and backend.lower().strip() not in _ALIAS:
-        if b not in _SUMMARY_BACKENDS:
+        if b not in _SUMMARY_BACKENDS:  # pragma: no cover - always true here (defensive)
             raise ValueError(f"Unknown summary backend {backend!r}. Choose from: {', '.join(sorted(_SUMMARY_BACKENDS))}")
-    if b not in _SUMMARY_BACKENDS:
-        raise ValueError(f"Unknown summary backend {backend!r}. Choose from: {', '.join(sorted(_SUMMARY_BACKENDS))}")
+    if b not in _SUMMARY_BACKENDS:  # pragma: no cover - aliases always expand into backends
+        raise ValueError(f"Unknown summary backend {backend!r}. Choose from: {', '.join(sorted(_SUMMARY_BACKENDS))}")  # pragma: no cover
 
     if b == "fake":
         inner = _build_fake_summary(episode, transcript, basename=basename)

@@ -115,3 +115,69 @@ def test_summary_markdown_with_model_and_truncated(tmp_path):
     md = _summary_to_markdown({"title": "T", "show": "S", "episode": 1, "overview": "ov", "key_points": ["kp"], "quotes": [], "backend": "openrouter", "model": "m", "truncated": True})
     assert "m" in md
     assert "truncated" in md.lower()
+
+
+def test_resolve_api_key_falsy_keychain():
+    with patch("podtx.keychain.get_api_key", return_value=""):
+        assert _resolve_api_key("fake", None, None, service="svc", account="acct") is None
+
+
+def test_validate_payload_legacy_blank_key_point_and_string_quote():
+    out = _validate_llm_payload({
+        "overview": "ov",
+        "key_points": ["kp1", "", "kp2"],
+        "quotes": ["q one", "q two"],
+    })
+    assert [n["insight"] for n in out["nuggets"]] == ["kp1", "kp2"]
+    assert out["nuggets"][0]["quote"] == "q one"
+
+
+def test_build_summary_fake_truncates_long_nugget_quote():
+    from podtx.summarize import build_summary
+    ep = Episode(guid="g", title="T", enclosure_url="https://example.com", show_title="S")
+    tx = Transcript(
+        text="First sentence here. Second sentence here. Third sentence here.",
+        segments=[Segment(0.0, 60.0, " ".join(["word"] * 50))],
+        language="en", model="m", engine="fake",
+    )
+    summary = build_summary(ep, tx, backend="fake")
+    assert len(summary["nuggets"][0]["quote"].split()) == 30
+
+
+def test_summarize_with_llm_unknown_backend_requires_model():
+    from podtx.summarize import _summarize_with_llm, SummarizeError
+    ep = Episode("g", "T", "https://example.com")
+    tx = Transcript(text="some text here. more words.", segments=[], language="en", model="m", engine="fake")
+    try:
+        _summarize_with_llm(
+            ep, tx,
+            backend="bogus", model=None, api_key=None, base_url=None,
+            timeout=60, temperature=0.3, max_input_chars=None, basename="",
+        )
+        assert False
+    except SummarizeError:
+        pass
+
+
+def test_summary_markdown_no_model_backend():
+    from podtx.summarize import _summary_to_markdown
+    md = _summary_to_markdown({"title": "T", "backend": "openrouter", "nuggets": []})
+    assert "Backend: openrouter" in md
+
+
+def test_summary_markdown_nugget_variants():
+    from podtx.summarize import _summary_to_markdown
+    nuggets = [
+        {"insight": "Full nugget", "context": "c", "why_it_matters": "w", "quote": "q", "timestamp": "00:10"},
+        {"insight": "No meta", "quote": ""},
+        {"insight": "Missing why", "context": "c2", "quote": "q2", "timestamp": "00:20"},
+    ]
+    md = _summary_to_markdown({"title": "T", "backend": "fake", "nuggets": nuggets, "top5_best": [0, 5, 1, 2]})
+    assert "Best of Show" in md
+    assert "Missing why" in md
+    assert "Full nugget" in md
+
+
+def test_validate_payload_legacy_quote_int_falls_fast():
+    out = _validate_llm_payload({"overview": "ov", "key_points": ["kp1"], "quotes": [123]})
+    assert out["nuggets"][0]["quote"] == ""

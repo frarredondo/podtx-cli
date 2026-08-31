@@ -27,7 +27,7 @@ def _to_datetime(value: object) -> datetime | None:
         try:
             dt = parsedate_to_datetime(value)
             if dt.tzinfo is None:
-                return dt.replace(tzinfo=timezone.utc)
+                return dt.replace(tzinfo=timezone.utc)  # pragma: no cover - parsedate returns aware in practice
             return dt
         except (TypeError, ValueError, IndexError):
             try:

@@ -72,3 +72,7 @@ def test_unique_basename_collision() -> None:
     uniq = unique_basename(_ep(), existing={base})
     assert uniq.startswith(base + "_")
     assert len(uniq) > len(base)
+
+
+def test_slugify_empty_falls_back_to_episode() -> None:
+    assert slugify("!!!") == "episode"
