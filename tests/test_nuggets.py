@@ -20,11 +20,15 @@ from podtx.nuggets import (
     _fake_nuggets,
     _format_timestamp,
     _locate_quote,
+    _merge_corpus_markdown,
     _merge_nuggets,
     _normalize,
     _nuggets_to_markdown,
+    _nugget_total,
+    _parse_clusters,
     _parse_json,
     _rubric_messages,
+    _same_idea_offline,
     _sidecar_fresh,
     _split_chunks,
     _split_text,
@@ -35,6 +39,7 @@ from podtx.nuggets import (
     _write_nugget_files,
     extract_nuggets_transcript,
     estimate_dry_run,
+    merge_nugget_sidecars,
     nuggets_many,
 )
 from podtx.providers import ProviderError, estimate_tokens
@@ -972,3 +977,256 @@ def test_estimate_dry_run_contextless_model() -> None:
     assert est.context_length is None
     assert est.fits is None
     assert est.cost_usd is None
+
+
+def _sidecar_data(title="Ep", basename="ep", nuggets=None) -> dict:
+    return {
+        "title": title,
+        "show": "Fake Show",
+        "episode": 1,
+        "guid": f"guid-{basename}",
+        "backend": "fake",
+        "model": None,
+        "prompt_version": NUGGETS_PROMPT_VERSION,
+        "generated_at": "2026-08-30T00:00:00+00:00",
+        "nuggets": nuggets if nuggets is not None else [_nugget()],
+    }
+
+
+def _write_sidecar(dirpath: Path, name: str, data: dict) -> Path:
+    p = dirpath / name
+    p.write_text(json.dumps(data), encoding="utf-8")
+    return p
+
+
+SAME_LOW = _nugget(insight="Ship small diffs so review is fast and safe", quote="Small diffs review fast")
+SAME_HIGH = _nugget(
+    insight="Shipping small diffs makes code review faster and safer.",
+    quote="Small diffs review fast.",
+    scores={"T": 2, "S": 2, "E": 2, "A": 2},
+    total=8,
+)
+OTHER = _nugget(
+    insight="Monorepos keep dependencies in one place",
+    quote="Monorepos centralize deps",
+    scores={"T": 2, "S": 2, "E": 2, "A": 1},
+    total=7,
+)
+
+
+def test_same_idea_offline_jaccard() -> None:
+    assert _same_idea_offline(SAME_LOW, SAME_HIGH) is True
+    assert _same_idea_offline(SAME_LOW, OTHER) is False
+
+
+def test_same_idea_offline_quote_containment() -> None:
+    a = _nugget(insight="Rewrite the login flow", quote="The login flow is a distributed systems problem at scale")
+    b = _nugget(insight="Auth touches everything", quote="The login flow is a distributed systems problem")
+    assert _same_idea_offline(a, b) is True
+
+
+def test_merge_offline_dedup_across_sidecars(tmp_path: Path) -> None:
+    sc1 = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW, OTHER]))
+    sc2 = _write_sidecar(tmp_path, "ep2.nuggets.json", _sidecar_data("Ep 2", "ep2", [SAME_HIGH]))
+    corpus = merge_nugget_sidecars([sc1, sc2], in_scope=2)
+    assert corpus["clustering"] == "offline"
+    assert corpus["episodes_processed"] == 2
+    assert corpus["episodes_in_scope"] == 2
+    groups = corpus["groups"]
+    assert len(groups) == 2
+    dup = next(g for g in groups if g["merged"] and g["total"] == 8)
+    assert len(dup["sources"]) == 2
+    assert dup["quote"] == SAME_HIGH["quote"]
+    solo = next(g for g in groups if not g["merged"])
+    assert solo["insight"] == OTHER["insight"]
+
+
+def test_merge_strongest_quote_wins_and_keeps_sources(tmp_path: Path) -> None:
+    sc1 = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW]))
+    sc2 = _write_sidecar(tmp_path, "ep2.nuggets.json", _sidecar_data("Ep 2", "ep2", [SAME_HIGH]))
+    corpus = merge_nugget_sidecars([sc1, sc2], in_scope=2)
+    dup = corpus["groups"][0]
+    assert dup["merged"] is True
+    assert dup["total"] == 8
+    assert dup["quote"] == "Small diffs review fast."
+    titles = {s["title"] for s in dup["sources"]}
+    assert titles == {"Ep 1", "Ep 2"}
+
+
+def test_merge_skips_malformed_sidecar(tmp_path: Path) -> None:
+    good = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW]))
+    bad = tmp_path / "bad.nuggets.json"
+    bad.write_text("{not json", encoding="utf-8")
+    corpus = merge_nugget_sidecars([good, bad], in_scope=2)
+    assert corpus["episodes_processed"] == 1
+    assert corpus["sidecars_skipped"] == [str(bad)]
+
+
+def test_merge_no_sidecars(tmp_path: Path) -> None:
+    corpus = merge_nugget_sidecars([], in_scope=0)
+    assert corpus["groups"] == []
+    assert corpus["episodes_processed"] == 0
+
+
+class _ClusterProvider:
+    name = "fake-lm"
+
+    def __init__(self, response: str) -> None:
+        self.response = response
+        self.calls = 0
+
+    def complete(self, messages, *, timeout=120.0, temperature=0.3) -> str:
+        self.timeout = timeout
+        self.temperature = temperature
+        self.calls += 1
+        return self.response
+
+
+def test_merge_semantic_verified_groups(tmp_path: Path) -> None:
+    sc1 = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW]))
+    sc2 = _write_sidecar(tmp_path, "ep2.nuggets.json", _sidecar_data("Ep 2", "ep2", [SAME_HIGH]))
+    provider = _ClusterProvider(json.dumps({"groups": [{"ids": [0, 1], "label": "small diffs"}]}))
+    corpus = merge_nugget_sidecars(
+        [sc1, sc2],
+        in_scope=2,
+        provider=provider,
+        timeout=30.0,
+        temperature=0.1,
+    )
+    assert corpus["clustering"] == "semantic"
+    assert provider.calls == 1
+    assert provider.timeout == 30.0
+    assert provider.temperature == 0.1
+    assert len(corpus["groups"]) == 1
+    assert len(corpus["groups"][0]["sources"]) == 2
+
+
+def test_merge_semantic_retries_then_falls_back(tmp_path: Path) -> None:
+    sc1 = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW]))
+    sc2 = _write_sidecar(tmp_path, "ep2.nuggets.json", _sidecar_data("Ep 2", "ep2", [OTHER]))
+    provider = _ClusterProvider("not json at all")
+    corpus = merge_nugget_sidecars([sc1, sc2], in_scope=2, provider=provider)
+    assert provider.calls == 2
+    assert corpus["clustering"] == "offline"
+    assert corpus["groups"]
+
+
+def test_merge_semantic_drops_unverified_member(tmp_path: Path) -> None:
+    sc1 = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW]))
+    sc2 = _write_sidecar(tmp_path, "ep2.nuggets.json", _sidecar_data("Ep 2", "ep2", [OTHER]))
+    provider = _ClusterProvider(json.dumps({"groups": [{"ids": [0, 1], "label": "grouped"}]}))
+    corpus = merge_nugget_sidecars([sc1, sc2], in_scope=2, provider=provider)
+    assert corpus["clustering"] == "semantic"
+    assert len(corpus["groups"]) == 2
+    merged_ids = {g["total"] for g in corpus["groups"]}
+    assert merged_ids == {6, 7}
+
+
+def test_merge_markdown_discloses_and_lists_best_of_show(tmp_path: Path) -> None:
+    sc1 = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW]))
+    sc2 = _write_sidecar(tmp_path, "ep2.nuggets.json", _sidecar_data("Ep 2", "ep2", [SAME_HIGH]))
+    corpus = merge_nugget_sidecars([sc1, sc2], in_scope=7)
+    md = _merge_corpus_markdown(corpus)
+    assert "2 processed of 7 in scope" in md
+    assert "Best of Show" in md
+    assert "small diffs" in md or "small diffs" in md.lower()
+
+
+def test_same_idea_offline_empty_insight_and_short_quotes() -> None:
+    assert _same_idea_offline(
+        _nugget(insight="   ", quote="x"), _nugget(insight=" ", quote="x")
+    ) is False
+    assert _same_idea_offline(
+        _nugget(insight="different idea here", quote="hi"),
+        _nugget(insight="another notion there", quote="hi"),
+    ) is False
+
+
+def test_parse_clusters_invalid_shapes() -> None:
+    assert _parse_clusters('["a"]', 2) is None
+    assert _parse_clusters("{}", 2) == []
+    assert _parse_clusters('{"groups": [42]}', 2) is None
+    assert _parse_clusters('{"groups": [{"ids": "x"}]}', 2) is None
+    assert _parse_clusters('{"groups": [{"ids": [0, 99]}]}', 2) is None
+    assert _parse_clusters('{"groups": [{"ids": []}]}', 2) is None
+    assert _parse_clusters("not json", 2) is None
+    assert _parse_clusters('{"groups": [{"ids": [0]}]}', 1) == [[0]]
+
+
+def test_nugget_total_fallback() -> None:
+    assert _nugget_total(_nugget(total="x", scores=None)) == 0
+
+
+def test_merge_skips_shape_invalid_and_blank_nuggets(tmp_path: Path) -> None:
+    good = _write_sidecar(tmp_path, "ep1.nuggets.json", _sidecar_data("Ep 1", "ep1", [SAME_LOW]))
+    shape_bad = tmp_path / "shape.nuggets.json"
+    shape_bad.write_text('{"hello": 1}', encoding="utf-8")
+    blank = tmp_path / "blank.nuggets.json"
+    blank.write_text(
+        json.dumps(_sidecar_data("Ep 2", "ep2", [{"quote": "no insight"}])), encoding="utf-8"
+    )
+    corpus = merge_nugget_sidecars([good, shape_bad, blank], in_scope=5)
+    assert corpus["episodes_processed"] == 2
+    assert corpus["sidecars_skipped"] == [str(shape_bad)]
+    assert len(corpus["groups"]) == 1
+
+
+def _corpus_dict(groups, **kw) -> dict:
+    return {
+        "episodes_processed": kw.get("processed", 1),
+        "episodes_in_scope": kw.get("scope", 1),
+        "clustering": kw.get("mode", "offline"),
+        "generated_at": "2026-08-30T00:00:00+00:00",
+        "sidecars_skipped": kw.get("skipped", []),
+        "groups": groups,
+    }
+
+
+def test_merge_markdown_empty_groups() -> None:
+    md = _merge_corpus_markdown(_corpus_dict([], processed=0, scope=0))
+    assert "_No nuggets to merge_" in md
+
+
+def test_merge_markdown_source_formatting_and_overflow() -> None:
+    groups = []
+    for i in range(12):
+        groups.append(
+            {
+                "insight": f"Insight {i}",
+                "total": 12 - i,
+                "tag": "eng",
+                "quote": "quote text",
+                "why_it_matters": "why",
+                "sources": [{"show": "Show A", "episode": 2, "timestamp": "00:01:02"}],
+            }
+        )
+    groups[1] = {
+        "insight": "No quote",
+        "total": 11,
+        "tag": "general",
+        "quote": "",
+        "sources": [],
+    }
+    groups[2] = {
+        "insight": "Str episode",
+        "total": 10,
+        "tag": "eng",
+        "quote": "q2",
+        "sources": [{"show": "", "episode": "e", "timestamp": ""}],
+    }
+    groups[10] = {
+        "insight": "Overflow",
+        "total": 2,
+        "tag": "eng",
+        "quote": "",
+        "sources": [{"show": "A", "episode": 1}, {"show": "B", "episode": 1}],
+    }
+    corpus = _corpus_dict(groups, processed=12, scope=12)
+    md = _merge_corpus_markdown(corpus)
+    assert '> "quote text" — [00:01:02]' in md
+    assert "Show A — 2 [00:01:02]" in md
+    assert "## Best of Show" in md
+    assert "## All groups" in md
+    assert "*Sources:* 2 episodes" in md
+    no_ts = _merge_corpus_markdown({**corpus, "generated_at": None})
+    assert "Episodes:" in no_ts

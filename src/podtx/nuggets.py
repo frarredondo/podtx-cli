@@ -477,7 +477,393 @@ def _merge_nuggets(nuggets: list[dict]) -> list[dict]:
     return merged[: _MAX_NUGGETS]
 
 
+_JACCARD_THRESHOLD = 0.6
+_MIN_QUOTE_CONTAINMENT_CHARS = 12
+_MAX_BEST_OF_SHOW = 10
+_CLUSTER_SYSTEM = (
+    "You are clustering durable insights extracted from podcast episodes. "
+    "Group nuggets that express the same underlying idea, even when worded "
+    "differently or said by different guests. Every id must appear in exactly "
+    "one group; leave unrelated nuggets ungrouped."
+)
+
+
+def _nugget_total(nugget: dict) -> int:
+    total = nugget.get("total")
+    if isinstance(total, int):
+        return total
+    values = nugget.get("scores") or {}
+    tallied = [v for v in values.values() if isinstance(v, int)]
+    return sum(tallied) if tallied else 0
+
+
 def _fake_nuggets(episode: Episode, transcript: Transcript, basename: str) -> list[dict]:
+    segs = [s for s in transcript.segments if s.text.strip()]
+    nuggets: list[dict] = []
+    if segs:
+        n = min(5, len(segs))
+        if n == 1:
+            idxs = [0]
+        elif n <= 3:
+            idxs = list(range(n))
+        else:
+            idxs = [0, n // 2, n - 1]
+        for i in idxs:
+            seg = segs[i]
+            text = seg.text.strip()
+            quote = text
+            words = quote.split()
+            if len(words) > _MAX_QUOTE_WORDS:
+                quote = " ".join(words[: _MAX_QUOTE_WORDS])
+            insight = text if len(text) <= 140 else text[:137].rstrip() + "..."
+            nuggets.append(
+                {
+                    "insight": insight,
+                    "context": f"{episode.show_title or 'Show'} — {basename}".strip(" —"),
+                    "why_it_matters": "Extractive placeholder — replace with LLM nuggets via --backend openrouter|opencode|openai|anthropic|lmstudio.",
+                    "quote": quote,
+                    "scores": {"T": 2, "S": 1, "E": 2, "A": 1},
+                    "total": 6,
+                    "tag": "general",
+                    "start": round(float(seg.start), 3),
+                    "end": round(float(seg.end), 3),
+                    "timestamp": _format_timestamp(seg.start),
+                }
+            )
+    if not nuggets:
+        text = _transcript_text(transcript)
+        if text:
+            insight = text if len(text) <= 140 else text[:137].rstrip() + "..."
+            nuggets.append(
+                {
+                    "insight": insight,
+                    "context": f"{episode.show_title or 'Show'} — {basename}".strip(" —"),
+                    "why_it_matters": "No transcript content — nothing extractable.",
+                    "quote": "",
+                    "scores": {"T": 2, "S": 1, "E": 1, "A": 1},
+                    "total": 5,
+                    "tag": "eng",
+                    "start": 0.0,
+                    "end": 0.0,
+                    "timestamp": "",
+                }
+            )
+    return nuggets[: _MAX_NUGGETS]
+
+
+def _normalize_tokens(text: str) -> set[str]:
+    return set(_normalize(text or "").split())
+
+
+def _insight_jaccard(a: dict, b: dict) -> float:
+    ta = _normalize_tokens(a.get("insight"))
+    tb = _normalize_tokens(b.get("insight"))
+    union = len(ta | tb)
+    if union == 0:
+        return 0.0
+    return len(ta & tb) / union
+
+
+def _quote_contains(a: dict, b: dict) -> bool:
+    qa = _normalize(a.get("quote") or "")
+    qb = _normalize(b.get("quote") or "")
+    if len(qa) < _MIN_QUOTE_CONTAINMENT_CHARS or len(qb) < _MIN_QUOTE_CONTAINMENT_CHARS:
+        return False
+    return qa in qb or qb in qa
+
+
+def _same_idea_offline(a: dict, b: dict) -> bool:
+    """Offline overlap classifier: two nuggets express the same idea."""
+    return _insight_jaccard(a, b) >= _JACCARD_THRESHOLD or _quote_contains(a, b)
+
+
+def _cluster_offline(nuggets: list[dict]) -> list[list[int]]:
+    used = [False] * len(nuggets)
+    groups: list[list[int]] = []
+    for i in range(len(nuggets)):
+        if used[i]:
+            continue
+        group = [i]
+        used[i] = True
+        for j in range(i + 1, len(nuggets)):
+            if used[j]:
+                continue
+            if any(_same_idea_offline(nuggets[k], nuggets[j]) for k in group):
+                group.append(j)
+                used[j] = True
+        groups.append(group)
+    return groups
+
+
+def _cluster_messages(nuggets: list[dict]) -> list[dict]:
+    lines = [f"{i}: {n.get('insight', '')}" for i, n in enumerate(nuggets)]
+    body = "\n".join(lines)
+    return [
+        {"role": "system", "content": _CLUSTER_SYSTEM},
+        {
+            "role": "user",
+            "content": (
+                "Cluster these nuggets by underlying idea:\n"
+                f"{body}\n"
+                'Reply JSON only: {"groups": [{"ids": [0, 2], "label": "short label"}]}. '
+                "Put each id in at most one group; ids not listed stay ungrouped."
+            ),
+        },
+    ]
+
+
+def _parse_clusters(raw: str, count: int) -> list[list[int]] | None:
+    try:
+        data = _parse_json(raw)
+    except NuggetsError:
+        return None
+    groups = data.get("groups") if isinstance(data, dict) else None
+    if not isinstance(groups, list) or not groups:
+        return []
+    seen: set[int] = set()
+    result: list[list[int]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            return None
+        ids = group.get("ids")
+        if not isinstance(ids, list):
+            return None
+        clean: list[int] = []
+        for i in ids:
+            if (
+                isinstance(i, bool)
+                or not isinstance(i, int)
+                or not 0 <= i < count
+                or i in seen
+            ):
+                return None
+            seen.add(i)
+            clean.append(i)
+        if clean:
+            result.append(clean)
+    return result or None
+
+
+def _verify_semantic_groups(groups: list[list[int]], nuggets: list[dict]) -> list[list[int]]:
+    """Only keep members that also clear the offline overlap test vs the group seed."""
+    verified: list[list[int]] = []
+    for group in groups:
+        seed = max(group, key=lambda i: _nugget_total(nuggets[i]))
+        kept = [seed]
+        for i in group:
+            if i != seed and _same_idea_offline(nuggets[i], nuggets[seed]):
+                kept.append(i)
+        verified.append(kept)
+    return verified
+
+
+def _cluster_semantic(
+    provider: Provider, nuggets: list[dict], *, timeout: float, temperature: float
+) -> list[list[int]]:
+    messages = _cluster_messages(nuggets)
+    for _ in range(2):
+        raw = provider.complete(messages, timeout=timeout, temperature=temperature)
+        parsed = _parse_clusters(raw, len(nuggets))
+        if parsed is not None:
+            return parsed
+    return []
+
+
+def _load_sidecar(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("nuggets"), list):
+        return None
+    return data
+
+
+def _sidecar_summary(data: dict) -> dict:
+    return {
+        "title": data.get("title", ""),
+        "show": data.get("show", ""),
+        "episode": data.get("episode"),
+        "guid": data.get("guid", ""),
+    }
+
+
+def _nugget_source(sidecar: dict, nugget: dict) -> dict:
+    return {
+        "title": sidecar.get("title", ""),
+        "show": sidecar.get("show", ""),
+        "episode": sidecar.get("episode"),
+        "guid": sidecar.get("guid", ""),
+        "start": nugget.get("start"),
+        "end": nugget.get("end"),
+        "timestamp": nugget.get("timestamp", ""),
+    }
+
+
+def _corpus_entry(seed: dict, sources: list[dict]) -> dict:
+    merged = len(sources) > 1
+    return {
+        "insight": seed.get("insight", ""),
+        "context": (f"{len(sources)} episodes" if merged else seed.get("context", "")),
+        "why_it_matters": seed.get("why_it_matters", ""),
+        "quote": seed.get("quote", ""),
+        "scores": seed.get("scores"),
+        "total": _nugget_total(seed),
+        "tag": seed.get("tag", "eng"),
+        "merged": merged,
+        "sources": sources,
+    }
+
+
+def merge_nugget_sidecars(
+    sidecars: list[Path],
+    *,
+    in_scope: int,
+    provider: Provider | None = None,
+    timeout: float = DEFAULT_NUGGETS_TIMEOUT,
+    temperature: float = DEFAULT_NUGGETS_TEMPERATURE,
+) -> dict:
+    """Merge same-idea nuggets across sidecars into a corpus report.
+
+    Returns the corpus dict: clustering mode, episodes processed vs in scope,
+    malformed sidecars skipped, and merged ``groups`` (best-first by score).
+    ``provider`` enables semantic clustering; it falls back to offline
+    clustering on unavailable or schema-invalid output.
+    """
+    sidecar_summaries: list[dict] = []
+    nuggets: list[dict] = []
+    origins: list[int] = []
+    skipped: list[str] = []
+    for path in sidecars:
+        data = _load_sidecar(path)
+        if data is None:
+            skipped.append(str(path))
+            continue
+        index = len(sidecar_summaries)
+        sidecar_summaries.append(_sidecar_summary(data))
+        for nugget in data.get("nuggets", []):
+            if isinstance(nugget, dict) and nugget.get("insight"):
+                nuggets.append(nugget)
+                origins.append(index)
+
+    if not nuggets:
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "clustering": "offline",
+            "episodes_in_scope": in_scope,
+            "episodes_processed": len(sidecar_summaries),
+            "sidecars_skipped": skipped,
+            "groups": [],
+        }
+
+    if provider is None:
+        clusters = _cluster_offline(nuggets)
+        mode = "offline"
+    else:
+        clusters = _cluster_semantic(
+            provider, nuggets, timeout=timeout, temperature=temperature
+        )
+        if clusters:
+            clusters = _verify_semantic_groups(clusters, nuggets)
+            mode = "semantic"
+        else:
+            mode = "offline"
+            clusters = _cluster_offline(nuggets)
+
+    grouped: set[int] = set()
+    for group in clusters:
+        grouped.update(group)
+    for i in range(len(nuggets)):
+        if i not in grouped:
+            clusters.append([i])
+            grouped.add(i)
+
+    entries: list[dict] = []
+    for group in clusters:
+        ordered = sorted(group, key=lambda i: -_nugget_total(nuggets[i]))
+        seed_index = ordered[0]
+        sources = [
+            _nugget_source(sidecar_summaries[origins[i]], nuggets[i]) for i in ordered
+        ]
+        entries.append(_corpus_entry(nuggets[seed_index], sources))
+    entries.sort(key=lambda e: e["total"], reverse=True)
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "clustering": mode,
+        "episodes_in_scope": in_scope,
+        "episodes_processed": len(sidecar_summaries),
+        "sidecars_skipped": skipped,
+        "groups": entries,
+    }
+
+
+def _merge_corpus_markdown(data: dict) -> str:
+    lines: list[str] = []
+    lines.append("# Nugget Corpus")
+    lines.append("")
+    lines.append(
+        f"Episodes: {data.get('episodes_processed', 0)} processed of "
+        f"{data.get('episodes_in_scope', 0)} in scope"
+    )
+    skipped = data.get("sidecars_skipped") or []
+    if skipped:
+        lines.append(f"Skipped: {len(skipped)} malformed sidecar(s)")
+    lines.append(f"Clustering: {data.get('clustering', 'offline')}")
+    generated = data.get("generated_at")
+    if generated:
+        lines.append(f"Generated: {generated}")
+    lines.append("")
+    groups = data.get("groups") or []
+    if not groups:
+        lines.append("_No nuggets to merge_")
+        lines.append("")
+        return "\n".join(lines)
+
+    best = groups[: _MAX_BEST_OF_SHOW]
+    lines.append("## Best of Show")
+    lines.append("")
+    for i, entry in enumerate(best, 1):
+        lines.append(f"### {i}. {entry.get('insight', '').strip()} ({entry.get('total', 0)}/8)")
+        lines.append("")
+        quote = entry.get("quote", "")
+        if quote:
+            sources = entry.get("sources") or []
+            ts = entry.get("timestamp") or (
+                sources[0].get("timestamp") if sources else ""
+            )
+            lines.append(f'> "{quote}" — [{ts}]' if ts else f'> "{quote}"')
+            lines.append("")
+        if entry.get("why_it_matters"):
+            lines.append(f"*Why:* {entry.get('why_it_matters')}")
+            lines.append("")
+        sources = entry.get("sources") or []
+        labels = [
+            _source_label(s.get("show"), s.get("episode"), s.get("timestamp")) for s in sources
+        ]
+        if labels:
+            lines.append(f"*Sources:* {'; '.join(labels)}")
+            lines.append("")
+    if len(groups) > _MAX_BEST_OF_SHOW:
+        lines.append("## All groups")
+        lines.append("")
+        for i, entry in enumerate(groups[_MAX_BEST_OF_SHOW:], _MAX_BEST_OF_SHOW + 1):
+            refs = len(entry.get("sources") or [])
+            lines.append(f"### {i}. {entry.get('insight', '').strip()} ({entry.get('total', 0)}/8)")
+            lines.append("")
+            if refs > 1:
+                lines.append(f"*Sources:* {refs} episodes")
+                lines.append("")
+    return "\n".join(lines)
+
+
+def _source_label(show: str, episode=None, timestamp: str = "") -> str:
+    label = str(show or episode or "").strip()
+    if isinstance(episode, int):
+        label = f"{label} — {episode}".strip(" —")
+    if timestamp:
+        label = f"{label} [{timestamp}]"
+    return label
     segs = [s for s in transcript.segments if s.text.strip()]
     nuggets: list[dict] = []
     if segs:

@@ -29,9 +29,11 @@ from podtx.nuggets import (
     DryRunEstimate,
     NuggetsError,
     _checked_formats,
+    _merge_corpus_markdown,
     _valid_backend,
     estimate_dry_run,
     extract_nuggets_transcript,
+    merge_nugget_sidecars,
     nuggets_many,
 )
 from podtx.providers import (
@@ -39,6 +41,7 @@ from podtx.providers import (
     ModelInfo,
     ProviderError,
     available_providers,
+    build_provider,
     catalog_providers,
     get_model,
     list_models,
@@ -1268,6 +1271,11 @@ def nuggets_cmd(
         "--dry-run",
         help="Estimate tokens and cost from the models.dev catalog without calling any backend or writing files",
     ),
+    merge: bool = typer.Option(
+        False,
+        "--merge",
+        help="Merge same-idea nuggets across existing sidecars for a feed or the whole library, writing corpus.nuggets.json/.md",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q"),
 ) -> None:
     """Extract durable insights ("nuggets") from existing transcript JSON.
@@ -1312,6 +1320,15 @@ def nuggets_cmd(
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
+    if merge and json_path is not None:
+        err_console.print(
+            "[red]For --merge specify exactly one of:[/red] `--feed <slug>` or `--all` (not a JSON path)"
+        )
+        raise typer.Exit(1)
+    if merge and dry_run:
+        err_console.print("[red]--merge and --dry-run cannot be combined[/red]")
+        raise typer.Exit(1)
+
     resolved_model = model if model is not None else settings.nuggets_model
     resolved_base = base_url if base_url is not None else settings.nuggets_base_url
     resolved_timeout = timeout if timeout is not None else settings.nuggets_timeout
@@ -1342,6 +1359,25 @@ def nuggets_cmd(
             backend=effective_backend,
             model=resolved_model,
             max_input_chars=resolved_max,
+            quiet=quiet,
+        )
+        return
+
+    if merge:
+        _run_nuggets_merge(
+            feed=feed,
+            all_feeds=all_feeds,
+            out_dir=out_dir,
+            transcripts_root=settings.transcripts_dir(),
+            backend=effective_backend,
+            model=resolved_model,
+            api_key=api_key,
+            base_url=resolved_base,
+            timeout=resolved_timeout,
+            temperature=resolved_temp,
+            settings_api_key=settings.nuggets_api_key,
+            service=settings.nuggets_api_key_service,
+            account=settings.nuggets_api_key_account,
             quiet=quiet,
         )
         return
@@ -1552,6 +1588,90 @@ def _run_nuggets_dry_run(
         )
     if ok != len(targets):
         raise typer.Exit(1)
+
+
+def _run_nuggets_merge(
+    *,
+    feed: str | None,
+    all_feeds: bool,
+    out_dir: Path | None,
+    transcripts_root: Path,
+    backend: str,
+    model: str | None,
+    api_key: str | None,
+    base_url: str | None,
+    timeout: float,
+    temperature: float,
+    settings_api_key: str | None,
+    service: str | None,
+    account: str | None,
+    quiet: bool,
+) -> None:
+    try:
+        targets = discover_transcript_jsons(
+            transcripts_root,
+            feed=None if all_feeds else feed,
+        )
+    except TranscriptJsonError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+
+    sidecars: list[Path] = []
+    for target in targets:
+        side = target.with_name(target.stem + ".nuggets.json")
+        if side.is_file():
+            sidecars.append(side)
+
+    if not sidecars:
+        if not quiet:
+            console.print("[dim]No nugget sidecar files found in scope; nothing to merge.[/dim]")
+        return
+
+    provider = None
+    if backend != "fake":
+        provider = build_provider(
+            backend,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            settings_api_key=settings_api_key,
+            service=service,
+            account=account,
+        )
+
+    corpus = merge_nugget_sidecars(
+        sidecars,
+        in_scope=len(targets),
+        provider=provider,
+        timeout=timeout,
+        temperature=temperature,
+    )
+
+    if out_dir is not None:
+        dest = out_dir.expanduser()
+    elif all_feeds:
+        dest = transcripts_root
+    else:
+        dest = transcripts_root / feed
+    dest.mkdir(parents=True, exist_ok=True)
+
+    corpus_json = dest / "corpus.nuggets.json"
+    corpus_md = dest / "corpus.nuggets.md"
+    corpus_json.write_text(
+        json.dumps(corpus, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    corpus_md.write_text(_merge_corpus_markdown(corpus), encoding="utf-8")
+
+    if quiet:
+        return
+    skipped = corpus["sidecars_skipped"]
+    suffix = f" ({len(skipped)} malformed sidecar skipped)" if skipped else ""
+    console.print(
+        f"[green]Merged[/green] {corpus['episodes_processed']} episodes \u2192 "
+        f"{len(corpus['groups'])} groups ({corpus['clustering']}){suffix}"
+    )
+    console.print(f"[dim]Wrote[/dim] {corpus_json}")
+    console.print(f"[dim]Wrote[/dim] {corpus_md}")
 
 
 def _show_provider_counts(raw: dict) -> None:
