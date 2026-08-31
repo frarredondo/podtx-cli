@@ -277,3 +277,32 @@ def test_glossary_built_from_all_metadata_fields() -> None:
     assert "Wonderland Show" in combined or "Wonderland" in combined
     assert "Bob Builder" in combined
     assert "Charlie Chaplin" in combined
+
+
+def test_build_glossary_skips_short_single_words() -> None:
+    ep = Episode(
+        guid="g1",
+        title="Ada",
+        enclosure_url="https://example.com/a.mp3",
+        show_title="Demo",
+    )
+    assert build_glossary(ep) == []
+
+
+def test_build_glossary_keeps_long_single_word() -> None:
+    ep = Episode(
+        guid="g1",
+        title="Sustainable Coding",
+        enclosure_url="https://example.com/a.mp3",
+        show_title="Demo",
+    )
+    assert build_glossary(ep) == ["Sustainable Coding"]
+
+
+def test_build_glossary_single_capitalized_word() -> None:
+    ep = Episode(
+        guid="g1",
+        title="Python",
+        enclosure_url="https://example.com/a.mp3",
+    )
+    assert build_glossary(ep) == ["Python"]

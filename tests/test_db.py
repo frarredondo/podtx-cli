@@ -58,3 +58,28 @@ def test_select_episodes_limit() -> None:
         episodes, done_guids={"g0"}, limit=1, process_all=True
     )
     assert len(all_pending) == 9
+
+
+def test_db_counts(tmp_path: Path) -> None:
+    db = Database(tmp_path / "state.db")
+    assert db.episode_count(1) == 0
+    assert db.done_count(1) == 0
+    feed = db.add_feed("https://example.com/feed.xml", "demo", "Demo")
+    db.upsert_episode(
+        feed_id=feed.id,
+        guid="ep-1",
+        title="Pilot",
+        published_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        episode_num=1,
+        enclosure_url="https://example.com/ep1.mp3",
+    )
+    db.mark_done(
+        feed_id=feed.id,
+        guid="ep-1",
+        engine="parakeet",
+        model="test",
+        output_paths=[tmp_path / "out.txt"],
+    )
+    assert db.episode_count(feed.id) == 1
+    assert db.done_count(feed.id) == 1
+    db.close()

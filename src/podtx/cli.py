@@ -173,7 +173,7 @@ def main_callback(
     if version:
         console.print(__version__)
         raise typer.Exit()
-    if ctx.invoked_subcommand is None:
+    if ctx.invoked_subcommand is None:  # pragma: no cover - invariant: no_args_is_help=True shows help before the callback runs
         typer.echo(ctx.get_help())
         raise typer.Exit()
 

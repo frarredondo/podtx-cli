@@ -233,3 +233,94 @@ def test_cli_format_feed_reports_failures(tmp_path: Path) -> None:
 def test_cli_format_requires_target(tmp_path: Path) -> None:
     result = runner.invoke(app, ["format", "--cleanup"])
     assert result.exit_code != 0
+
+
+def test_load_transcript_json_rejects_non_object_and_bad_date(tmp_path: Path) -> None:
+    from podtx.format_cmd import TranscriptJsonError
+
+    arr = tmp_path / "arr.json"
+    arr.write_text("[1, 2, 3]", encoding="utf-8")
+    try:
+        load_transcript_json(arr)
+    except TranscriptJsonError:
+        pass
+    else:
+        raise AssertionError("expected non-object error")
+
+    bad_date = tmp_path / "bad_date.json"
+    bad_date.write_text(json.dumps({"date": "not-a-date", "segments": []}), encoding="utf-8")
+    try:
+        load_transcript_json(bad_date)
+    except TranscriptJsonError as exc:
+        assert "Invalid date" in str(exc)
+    else:
+        raise AssertionError("expected bad date error")
+
+
+def test_discover_missing_root_returns_empty(tmp_path: Path) -> None:
+    from podtx.format_cmd import discover_transcript_jsons
+
+    assert discover_transcript_jsons(tmp_path / "nope") == []
+
+
+def test_reformat_indexes_search_entry(tmp_path: Path) -> None:
+    from podtx.config import load_settings
+    from podtx.db import Database
+    from podtx.format_cmd import _maybe_index_after_reformat
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/feed.xml", "demo", "Demo")
+    db.close()
+
+    path = _sample_json(tmp_path.parent)
+    # put sample under a feed dir
+    feed_dir = settings.transcripts_dir("demo")
+    feed_dir.mkdir(parents=True, exist_ok=True)
+    ep = path
+    from shutil import copy
+    copy(str(path), str(feed_dir / "ep.json"))
+    json_path = feed_dir / "ep.json"
+    written = reformat_transcript(
+        json_path, out_dir=feed_dir, formats=("txt", "json")
+    )
+    _maybe_index_after_reformat(
+        *load_transcript_json(json_path),
+        written,
+        config_data_dir=data_dir,
+    )
+    rows = db_search = Database(settings.state_db_path())
+    r = rows.search_transcripts("fox")
+    assert len(r) == 1
+    rows.close()
+
+
+def test_reformat_indexes_without_txt_candidate(tmp_path: Path) -> None:
+    from podtx.config import load_settings
+    from podtx.db import Database
+    from podtx.format_cmd import _maybe_index_after_reformat
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    settings = load_settings(data_dir=data_dir)
+    db = Database(settings.state_db_path())
+    db.add_feed("https://example.com/feed.xml", "demo", "Demo")
+    db.close()
+
+    feed_dir = settings.transcripts_dir("demo")
+    feed_dir.mkdir(parents=True, exist_ok=True)
+    from shutil import copy
+    copy(str(_sample_json(tmp_path.parent)), str(feed_dir / "ep.json"))
+    json_path = feed_dir / "ep.json"
+    written = reformat_transcript(json_path, out_dir=feed_dir, formats=("json",))
+    _maybe_index_after_reformat(
+        *load_transcript_json(json_path),
+        written,
+        config_data_dir=data_dir,
+    )
+    db2 = Database(settings.state_db_path())
+    r = db2.search_transcripts("fox")
+    assert len(r) == 1
+    db2.close()

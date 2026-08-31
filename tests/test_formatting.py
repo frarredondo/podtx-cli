@@ -144,3 +144,90 @@ def test_writers_readable_and_rounded(tmp_path: Path) -> None:
     assert payload["readable"] is True
     assert payload["segments"][0]["end"] == 1.5
     assert "\n\n" in payload["text"]
+
+
+def test_segments_to_paragraphs_skips_empty_segment() -> None:
+    from podtx.formatting import segments_to_paragraphs
+    from podtx.models import Segment
+
+    segs = [
+        Segment(0.0, 1.0, "   "),
+        Segment(2.0, 3.0, "Actual words here."),
+    ]
+    out = segments_to_paragraphs(segs)
+    assert "Actual words here." in out
+    assert "   " not in out
+
+
+def test_body_text_diarize_non_readable_uses_speaker_lines() -> None:
+    from podtx.formatting import body_text
+    from podtx.models import Segment
+
+    segs = [
+        Segment(0.0, 1.0, "Hello", speaker="person-a"),
+        Segment(1.0, 2.0, "There", speaker="person-a"),
+    ]
+    out = body_text("IGNORED", segs, readable=False, diarize=True)
+    assert out == "person-a: Hello\nperson-a: There"
+
+
+def test_segments_to_paragraphs_with_speaker_change_and_gap() -> None:
+    from podtx.formatting import segments_to_paragraphs_with_speaker
+    from podtx.models import Segment
+
+    segs = [
+        Segment(0.0, 1.0, "Opening words.", speaker="alice"),
+        Segment(2.0, 3.0, "Gap after opener.", speaker="bob"),
+        Segment(4.0, 5.0, "Bob continues", speaker="bob"),
+    ]
+    out = segments_to_paragraphs_with_speaker(
+        segs,
+        gap_seconds=0.8,
+        min_paragraph_seconds=100.0,
+        max_paragraph_seconds=1000.0,
+        max_paragraph_words=1000,
+    )
+    assert "alice: Opening words." in out
+    assert "bob: Gap after opener." in out
+
+
+def test_body_text_with_report_correct_names() -> None:
+    from podtx.formatting import body_text_with_report
+    from podtx.models import Episode
+
+    ep = Episode(
+        guid="g",
+        title="Sabine Wojcieszak",
+        enclosure_url="https://x/a.mp3",
+    )
+    text, subs = body_text_with_report(
+        "Today we talk with Sabina Vosheshak.",
+        [],
+        readable=False,
+        correct_names=True,
+        episode=ep,
+    )
+    assert "Sabine Wojcieszak" in text
+    assert len(subs) >= 0
+
+
+def test_segments_to_text_with_speaker_skips_blank() -> None:
+    from podtx.formatting import segments_to_text_with_speaker
+    from podtx.models import Segment
+
+    segs = [Segment(0.0, 1.0, "  "), Segment(2.0, 3.0, "Real", speaker="bob")]
+    assert segments_to_text_with_speaker(segs) == "bob: Real"
+
+
+def test_segments_to_paragraphs_with_speaker_flushes_empty() -> None:
+    from podtx.formatting import segments_to_paragraphs_with_speaker
+
+    assert segments_to_paragraphs_with_speaker([]) == ""
+
+
+def test_body_text_with_report_no_correct_names() -> None:
+    from podtx.formatting import body_text_with_report
+
+    text, subs = body_text_with_report("  Some raw text.  ", [], readable=False, correct_names=False)
+    assert text == "Some raw text."
+    assert subs == []

@@ -439,3 +439,17 @@ def test_summarize_many_llm_api_error(tmp_path: Path, monkeypatch):
     result = summarize_many([jp], backend="openrouter", api_key="k")
     assert result.failed == 1
     assert "boom" in result.errors[0][1]
+
+
+def test_build_quote_chunk_fallback(monkeypatch):
+    ep = _fake_episode()
+    tx = _fake_transcript(segments=[
+        Segment(0.0, 1.0, "Alpha unknown content."),
+        Segment(5.0, 6.0, "the quick brown fox ran away"),
+    ])
+    q = "the quick brown fox jumped over the lazy dog"
+    payload = json.dumps({"nuggets": [{"insight": "i", "context": "ctx", "why_it_matters": "why", "quote": q}], "top5_best": [0]})
+    monkeypatch.setattr("podtx.summarize._call_openai_compatible", lambda **kw: payload)
+    summary = build_summary(ep, tx, backend="openrouter", api_key="k")
+    assert summary["nuggets"][0]["start"] == 5.0
+    assert summary["nuggets"][0]["timestamp"] == "00:05"
